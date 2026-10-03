@@ -6,6 +6,7 @@ export default defineConfig({
     projects: [
       {
         test: { name: "shared", include: ["test/shared/**/*.test.ts"], environment: "node" },
+        // pure stage/audio logic only: nothing here may touch the DOM
       },
       {
         plugins: [cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" } })],

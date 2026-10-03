@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ErrorCode, Peer, ServerMessage } from "../../shared/protocol";
+import { levels } from "../audio/levels";
 import { openMic, stopStream } from "../audio/mic";
 import { Mesh } from "../net/mesh";
 import type { LinkState } from "../net/peer";
@@ -50,6 +51,7 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
           mesh?.close();
           stopStream(mic);
           mic = null;
+          levels.clear();
           useRoom.setState((cur) => ({ status: "ended", endReason: cur.endReason, hasMic: false }));
         } else if (state === "reconnecting") {
           useRoom.setState({ status: "reconnecting" });
@@ -64,6 +66,7 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
   mesh = new Mesh(selfId, stream, {
     send: (to, data) => s.send({ t: "signal", to, data }),
     onLinkState(peerId, state) {
+      if (state === null) levels.detach(peerId);
       useRoom.setState((cur) => {
         const links = { ...cur.links };
         if (state === null) delete links[peerId];
@@ -71,7 +74,9 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
         return { links };
       });
     },
+    onStream: (peerId, remote) => levels.attach(peerId, remote),
   });
+  if (stream) levels.attach(selfId, stream);
   if (import.meta.env.DEV) (window as unknown as { __pixelMesh?: Mesh }).__pixelMesh = mesh;
   s.start();
 }
@@ -83,6 +88,7 @@ export function disconnectRoom() {
   mesh = undefined;
   stopStream(mic);
   mic = null;
+  levels.clear();
   useRoom.setState(initial);
 }
 
@@ -106,6 +112,7 @@ export async function switchMic(deviceId: string) {
   await mesh?.replaceTrack(next);
   stopStream(mic);
   mic = next;
+  levels.attach(getPeerId(), next);
 }
 
 function apply(msg: ServerMessage) {

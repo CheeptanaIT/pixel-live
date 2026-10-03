@@ -21,6 +21,8 @@ export interface PeerLinkOptions {
   localStream: MediaStream | null;
   send(data: SignalData): void;
   onState(state: LinkState): void;
+  /** The remote voice, once its track arrives. */
+  onStream(stream: MediaStream): void;
 }
 
 /** One RTCPeerConnection to one remote peer, using the "perfect negotiation" pattern. */
@@ -73,7 +75,9 @@ export class PeerLink {
     };
 
     pc.ontrack = ({ track, streams }) => {
-      this.audio.srcObject = streams[0] ?? new MediaStream([track]);
+      const stream = streams[0] ?? new MediaStream([track]);
+      this.audio.srcObject = stream;
+      opts.onStream(stream);
       void this.audio.play().catch(() => {
         // Blocked only if the page never had a user gesture; joining the room is one.
       });

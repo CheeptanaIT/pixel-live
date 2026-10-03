@@ -1,4 +1,5 @@
 import { useRoute } from "./router";
+import DevStage from "./routes/DevStage";
 import Home from "./routes/Home";
 import Room from "./routes/Room";
 import Stage from "./routes/Stage";
@@ -12,6 +13,8 @@ export default function App() {
       return <Room roomId={route.roomId} />;
     case "stage":
       return <Stage roomId={route.roomId} />;
+    case "devStage":
+      return <DevStage />;
     case "notFound":
       return (
         <main className="grid h-full place-items-center font-pixel text-2xl">

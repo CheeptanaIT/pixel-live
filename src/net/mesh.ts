@@ -5,6 +5,7 @@ import { PeerLink, type LinkState } from "./peer";
 export interface MeshCallbacks {
   send(to: string, data: SignalData): void;
   onLinkState(peerId: string, state: LinkState | null): void;
+  onStream(peerId: string, stream: MediaStream): void;
 }
 
 /** Full-mesh of PeerLinks, one per other peer in the room. */
@@ -33,6 +34,7 @@ export class Mesh {
         localStream: this.localStream,
         send: (data) => this.cb.send(id, data),
         onState: (state) => this.cb.onLinkState(id, state),
+        onStream: (stream) => this.cb.onStream(id, stream),
       }),
     );
     this.cb.onLinkState(id, "connecting");

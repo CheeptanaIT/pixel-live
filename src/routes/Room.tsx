@@ -1,11 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MAX_NAME_LENGTH, MAX_SPEAKERS, type ErrorCode, type Peer } from "../../shared/protocol";
 import { isValidRoomId } from "../../shared/room";
+import { levels } from "../audio/levels";
 import { MicError, listMics, openMic, stopStream, type MicDevice, type MicErrorKind } from "../audio/mic";
 import type { LinkState } from "../net/peer";
 import { navigate } from "../router";
+import type { StageSource } from "../stage/StageRenderer";
+import StageView from "../stage/StageView";
 import { getHostKey, getName } from "../store/me";
 import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, switchMic, useRoom } from "../store/room";
+
+/** Module-level so its identity is stable: a new object would rebuild the whole renderer. */
+const levelsSource: StageSource = {
+  isSpeaking: (id) => levels.isSpeaking(id),
+  tick: (now) => levels.tick(now),
+};
 
 const END_MESSAGES: Partial<Record<ErrorCode, string>> = {
   FULL: `ห้องเต็มแล้ว (สูงสุด ${MAX_SPEAKERS} คน)`,
@@ -252,7 +261,11 @@ function Inside({ roomId }: { roomId: string }) {
   const [copied, setCopied] = useState(false);
 
   const inviteUrl = `${location.origin}/r/${roomId}`;
-  const people: Peer[] = me ? [me, ...peers.filter((p) => p.role === "speaker")] : [];
+  const people = useMemo<Peer[]>(
+    () => (me ? [me, ...peers.filter((p) => p.role === "speaker")] : []),
+    [me, peers],
+  );
+  const stagePeers = useMemo(() => people.map((p) => ({ peerId: p.peerId, name: p.name })), [people]);
 
   async function copyInvite() {
     try {
@@ -265,7 +278,7 @@ function Inside({ roomId }: { roomId: string }) {
   }
 
   return (
-    <main className="mx-auto flex h-full max-w-2xl flex-col gap-4 px-4 py-6">
+    <main className="mx-auto flex min-h-full max-w-3xl flex-col gap-4 px-4 py-6">
       {status !== "online" && (
         <div role="status" className="pixel-box bg-hot px-4 py-2 text-center font-pixel text-ink">
           {status === "connecting" ? "กำลังเชื่อมต่อ…" : "สัญญาณหลุด กำลังเชื่อมต่อใหม่…"}
@@ -288,6 +301,8 @@ function Inside({ roomId }: { roomId: string }) {
           )}
         </div>
       </header>
+
+      <StageView peers={stagePeers} source={levelsSource} />
 
       <MicControls />
 

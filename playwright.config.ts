@@ -3,6 +3,9 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
+  // One worker on purpose: each test opens several Chromium pages with WebRTC and software WebGL.
+  // Run in parallel they starve each other of CPU and time out (not a product bug, but flaky).
+  workers: 1,
   retries: 0,
   use: {
     baseURL: "http://localhost:5199",
