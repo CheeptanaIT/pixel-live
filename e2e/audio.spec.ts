@@ -1,9 +1,24 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
-type Mesh = { stats(): Promise<Record<string, { bytesReceived: number; packetsReceived: number }>> };
+/**
+ * Records every RTCPeerConnection the page creates, so tests can read real RTP statistics from a
+ * dev server *and* from the deployed site, without the app exposing any debug hook in production.
+ */
+function trackPeerConnections() {
+  const Original = window.RTCPeerConnection;
+  const created: RTCPeerConnection[] = [];
+  (window as unknown as { __testPcs: RTCPeerConnection[] }).__testPcs = created;
+  window.RTCPeerConnection = class extends Original {
+    constructor(...args: ConstructorParameters<typeof Original>) {
+      super(...args);
+      created.push(this);
+    }
+  };
+}
 
 async function person(browser: Browser) {
   const ctx = await browser.newContext();
+  await ctx.addInitScript(trackPeerConnections);
   return { ctx, page: await ctx.newPage() };
 }
 
@@ -32,9 +47,17 @@ async function expectAudioFlowing(page: Page, expected: number) {
     .poll(
       () =>
         page.evaluate(async () => {
-          const mesh = (window as unknown as { __pixelMesh?: Mesh }).__pixelMesh;
-          const stats = mesh ? await mesh.stats() : {};
-          return Object.values(stats).filter((s) => s.packetsReceived > 20).length;
+          const pcs = (window as unknown as { __testPcs?: RTCPeerConnection[] }).__testPcs ?? [];
+          let flowing = 0;
+          for (const pc of pcs) {
+            if (pc.connectionState === "closed") continue;
+            let packets = 0;
+            (await pc.getStats()).forEach((r) => {
+              if (r.type === "inbound-rtp" && r.kind === "audio") packets += r.packetsReceived ?? 0;
+            });
+            if (packets > 20) flowing++;
+          }
+          return flowing;
         }),
       { timeout: 20_000, message: "audio packets should arrive from every other peer" },
     )

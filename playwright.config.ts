@@ -1,5 +1,10 @@
 import { defineConfig } from "@playwright/test";
 
+// Point the suite at a deployed site instead of a local dev server:
+//   PIXEL_BASE_URL=https://example.workers.dev npx playwright test room audio
+// (stage.spec.ts needs the dev-only /dev/stage route and test hooks, so it only runs locally.)
+const remote = process.env.PIXEL_BASE_URL;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -8,7 +13,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   use: {
-    baseURL: "http://localhost:5199",
+    baseURL: remote ?? "http://localhost:5199",
     locale: "th-TH",
     permissions: ["microphone"],
     // Chromium's synthetic mic emits a periodic beep, so audio really flows without hardware.
@@ -16,10 +21,12 @@ export default defineConfig({
       args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
     },
   },
-  webServer: {
-    command: "npx vite --port 5199 --strictPort",
-    url: "http://localhost:5199/api/health",
-    reuseExistingServer: true,
-    timeout: 60_000,
-  },
+  webServer: remote
+    ? undefined
+    : {
+        command: "npx vite --port 5199 --strictPort",
+        url: "http://localhost:5199/api/health",
+        reuseExistingServer: true,
+        timeout: 60_000,
+      },
 });
