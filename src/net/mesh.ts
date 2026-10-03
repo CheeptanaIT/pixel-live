@@ -9,6 +9,7 @@ export interface MeshCallbacks {
   onChannelOpen(peerId: string): void;
   onChannelClose(peerId: string): void;
   onControl(peerId: string, text: string): void;
+  onPlaybackBlocked(): void;
 }
 
 /** Full-mesh of PeerLinks, one per other peer in the room. */
@@ -41,6 +42,7 @@ export class Mesh {
         onChannelOpen: () => this.cb.onChannelOpen(id),
         onChannelClose: () => this.cb.onChannelClose(id),
         onControl: (text) => this.cb.onControl(id, text),
+        onPlaybackBlocked: () => this.cb.onPlaybackBlocked(),
       }),
     );
     this.cb.onLinkState(id, "connecting");
@@ -53,6 +55,11 @@ export class Mesh {
     this.links.delete(peerId);
     this.cb.onChannelClose(peerId);
     this.cb.onLinkState(peerId, null);
+  }
+
+  /** After a user gesture: start any playback the browser held back. */
+  resumePlayback() {
+    for (const link of this.links.values()) link.resumePlayback();
   }
 
   /** Text message to one peer over the data channel (no-op if it is not open). */

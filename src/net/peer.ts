@@ -27,6 +27,8 @@ export interface PeerLinkOptions {
   onChannelOpen(): void;
   onChannelClose(): void;
   onControl(text: string): void;
+  /** The browser refused to start playback (autoplay policy: no user gesture on the page yet). */
+  onPlaybackBlocked(): void;
 }
 
 /** Above this much queued data, `sendControl` waits for the buffer to drain. */
@@ -102,9 +104,9 @@ export class PeerLink {
       const stream = streams[0] ?? new MediaStream([track]);
       this.audio.srcObject = stream;
       opts.onStream(stream);
-      void this.audio.play().catch(() => {
-        // Blocked only if the page never had a user gesture; joining the room is one.
-      });
+      // Joining a room is a click, so this normally succeeds. The OBS page has no click at all:
+      // OBS allows autoplay, a plain browser tab does not, and then we need a gesture to resume.
+      void this.audio.play().catch(() => opts.onPlaybackBlocked());
     };
 
     pc.onconnectionstatechange = () => {
@@ -188,6 +190,11 @@ export class PeerLink {
     if (!import.meta.env.DEV) return;
     this.events.push(`${(performance.now() / 1000).toFixed(2)} ${event}`);
     if (this.events.length > 60) this.events.shift();
+  }
+
+  /** Retry playback after a user gesture. */
+  resumePlayback() {
+    if (this.audio.srcObject) void this.audio.play().catch(() => undefined);
   }
 
   /** Send a text message to this peer, waiting if the channel is backed up. Drops it if closed. */

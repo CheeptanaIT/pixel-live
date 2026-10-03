@@ -1,22 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MAX_NAME_LENGTH, MAX_SPEAKERS, type ErrorCode, type Peer } from "../../shared/protocol";
 import { isValidRoomId } from "../../shared/room";
-import { levels } from "../audio/levels";
 import { MicError, listMics, openMic, stopStream, type MicDevice, type MicErrorKind } from "../audio/mic";
 import type { LinkState } from "../net/peer";
 import { navigate } from "../router";
-import type { StageSource } from "../stage/StageRenderer";
+import { levelsSource } from "../stage/source";
 import StageView from "../stage/StageView";
 import { getHostKey, getName } from "../store/me";
 import { saveMySpec } from "../avatar/local";
 import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, setMyAvatar, switchMic, useRoom } from "../store/room";
 import AvatarPicker from "../ui/AvatarPicker";
-
-/** Module-level so its identity is stable: a new object would rebuild the whole renderer. */
-const levelsSource: StageSource = {
-  isSpeaking: (id) => levels.isSpeaking(id),
-  tick: (now) => levels.tick(now),
-};
 
 const END_MESSAGES: Partial<Record<ErrorCode, string>> = {
   FULL: `ห้องเต็มแล้ว (สูงสุด ${MAX_SPEAKERS} คน)`,
@@ -258,6 +251,70 @@ function MicControls() {
   );
 }
 
+/** Host-only: the link for OBS's Browser Source, plus the handful of settings people get wrong. */
+function ObsPanel({ roomId, connected }: { roomId: string; connected: number }) {
+  const [transparent, setTransparent] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const url = `${location.origin}/s/${roomId}${transparent ? "?transparent=1" : ""}`;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      prompt("คัดลอกลิงก์สำหรับ OBS", url);
+    }
+  }
+
+  return (
+    <details className="pixel-box bg-panel p-4">
+      <summary className="cursor-pointer font-pixel text-lg">
+        📺 ไลฟ์ผ่าน OBS{" "}
+        {connected > 0 && (
+          <span data-testid="obs-status" className="text-sm text-glow">
+            ● OBS เชื่อมต่ออยู่
+          </span>
+        )}
+      </summary>
+      <div className="mt-3 flex flex-col gap-3 text-sm">
+        <div className="flex flex-wrap gap-2">
+          <input
+            readOnly
+            value={url}
+            aria-label="ลิงก์สำหรับ OBS"
+            onFocus={(e) => e.currentTarget.select()}
+            className="min-w-0 flex-1 border-4 border-edge bg-ink px-2 py-2 text-xs"
+          />
+          <button onClick={copy} className="pixel-btn bg-glow px-3 py-2 text-ink">
+            {copied ? "คัดลอกแล้ว ✓" : "📋 คัดลอก"}
+          </button>
+        </div>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={transparent} onChange={(e) => setTransparent(e.target.checked)} />
+          พื้นหลังโปร่งใส (ให้ซ้อนบนฉากของ OBS เอง)
+        </label>
+        <ol className="list-decimal space-y-1 pl-5">
+          <li>
+            ใน OBS: Sources → <b>+</b> → <b>Browser</b> แล้ววางลิงก์นี้ ตั้งความกว้าง <b>1920</b> สูง <b>1080</b>
+          </li>
+          <li>
+            ติ๊ก <b>Control audio via OBS</b> เพื่อให้เสียงของทุกคนเข้าสตรีม
+          </li>
+          <li>
+            ปิดตัวเลือก <b>Shutdown source when not visible</b> และ <b>Refresh browser when scene becomes active</b> ไม่งั้นการเชื่อมต่อจะหลุดทุกครั้งที่สลับฉาก
+          </li>
+          <li>อย่าเปิด Audio Monitoring ของ source นี้ (จะเกิดเสียงสะท้อน)</li>
+          <li>ไลฟ์หลายแพลตฟอร์มพร้อมกัน: ใช้ปลั๊กอินฟรี <b>obs-multi-rtmp</b></li>
+        </ol>
+        <p className="opacity-70">
+          ลิงก์นี้ใครได้ไปก็ฟังห้องได้เหมือนลิงก์เชิญ อย่าโพสต์สาธารณะ หน้า OBS ไม่มีปุ่มหรือชื่อของคุณ มีแต่ภาพเวที
+        </p>
+      </div>
+    </details>
+  );
+}
+
 function Inside({ roomId }: { roomId: string }) {
   const status = useRoom((s) => s.status);
   const me = useRoom((s) => s.me);
@@ -315,6 +372,8 @@ function Inside({ roomId }: { roomId: string }) {
       <StageView peers={stagePeers} source={levelsSource} />
 
       <MicControls />
+
+      {me?.isHost && <ObsPanel roomId={roomId} connected={peers.filter((p) => p.role === "stage").length} />}
 
       <details className="pixel-box bg-panel p-4">
         <summary className="cursor-pointer font-pixel text-lg">🎨 เปลี่ยนตัวละคร</summary>

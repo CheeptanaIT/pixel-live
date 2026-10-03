@@ -52,6 +52,15 @@ export class LevelMonitor {
     }
   }
 
+  /** True while the browser keeps the audio engine paused (no user gesture yet): levels read as silence. */
+  get suspended(): boolean {
+    return this.ctx?.state === "suspended";
+  }
+
+  resume() {
+    return this.ctx?.resume();
+  }
+
   isSpeaking(id: string): boolean {
     return this.taps.get(id)?.gate.isSpeaking ?? false;
   }

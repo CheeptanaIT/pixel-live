@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ErrorCode, Peer, ServerMessage } from "../../shared/protocol";
+import type { ErrorCode, Peer, Role, ServerMessage } from "../../shared/protocol";
 import type { AvatarSpec } from "../../shared/p2p";
 import { artFromSeed, artFromSpec, acceptPng, type AvatarArt } from "../avatar/art";
 import { blobStore } from "../avatar/blobs";
@@ -29,6 +29,8 @@ interface RoomState {
   muted: boolean;
   /** Drawable art by peerId once known; peers missing here are drawn as generated characters. */
   avatars: Record<string, AvatarArt>;
+  /** The browser is holding playback back until the user clicks (never true inside OBS). */
+  audioBlocked: boolean;
 }
 
 const initial: RoomState = {
@@ -39,6 +41,7 @@ const initial: RoomState = {
   hasMic: false,
   muted: false,
   avatars: {},
+  audioBlocked: false,
 };
 
 export const useRoom = create<RoomState>(() => initial);
@@ -61,17 +64,21 @@ function dropAvatar(peerId: string) {
   });
 }
 
-/** `stream` is the already-opened mic, or null to join as a listener. The store owns it from here. */
-export function connectRoom(roomId: string, name: string, stream: MediaStream | null) {
+/**
+ * `stream` is the already-opened mic, or null to join as a listener. The store owns it from here.
+ * `role: "stage"` is the OBS page: it only listens, has no character, and must not overwrite the
+ * name this browser remembers for the real user.
+ */
+export function connectRoom(roomId: string, name: string, stream: MediaStream | null, role: Role = "speaker") {
   disconnectRoom();
-  setName(name);
+  if (role === "speaker") setName(name);
   mic = stream;
   useRoom.setState({ ...initial, status: "connecting", hasMic: stream !== null });
 
   const selfId = getPeerId();
   const s = new Signaling(
     roomId,
-    () => ({ t: "hello", peerId: selfId, name, role: "speaker", hostKey: getHostKey(roomId) }),
+    () => ({ t: "hello", peerId: selfId, name, role, hostKey: getHostKey(roomId) }),
     {
       onState(state) {
         if (signaling !== s) return;
@@ -111,6 +118,7 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
       });
     },
     onStream: (peerId, remote) => levels.attach(peerId, remote),
+    onPlaybackBlocked: () => useRoom.setState({ audioBlocked: true }),
   });
   if (stream) levels.attach(selfId, stream);
 
@@ -125,7 +133,7 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
       });
     },
   });
-  void applyMyAvatar(getMySpec(), selfId, m);
+  if (role === "speaker") void applyMyAvatar(getMySpec(), selfId, m);
   if (import.meta.env.DEV) (window as unknown as { __pixelMesh?: Mesh }).__pixelMesh = mesh;
   s.start();
 }
@@ -140,6 +148,18 @@ export function disconnectRoom() {
   mic = null;
   levels.clear();
   useRoom.setState(initial);
+}
+
+/** True while sound is held back by the browser's autoplay policy (waiting for a click). */
+export function isAudioBlocked(): boolean {
+  return useRoom.getState().audioBlocked || levels.suspended;
+}
+
+/** Call from a user gesture: lets the browser start the audio it was holding back. */
+export function resumeAudio() {
+  void levels.resume();
+  mesh?.resumePlayback();
+  useRoom.setState({ audioBlocked: false });
 }
 
 /** Show my own avatar locally and announce it to everyone. Falls back to a generated one if files are gone. */

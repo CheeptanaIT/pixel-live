@@ -157,7 +157,11 @@ export class StageRenderer {
     app.ticker.add(() => this.frame(performance.now()));
   }
 
-  static async create(host: HTMLElement, source: StageSource): Promise<StageRenderer> {
+  /**
+   * `transparent` draws only the characters (no background, alpha 0 elsewhere) so OBS can place
+   * them over its own scene.
+   */
+  static async create(host: HTMLElement, source: StageSource, opts: { transparent?: boolean } = {}): Promise<StageRenderer> {
     const app = new Application();
     await app.init({
       width: STAGE_W,
@@ -167,13 +171,13 @@ export class StageRenderer {
       antialias: false,
       roundPixels: true,
       background: "#1b1530",
+      backgroundAlpha: opts.transparent ? 0 : 1,
     });
     app.canvas.style.imageRendering = "pixelated";
     app.canvas.style.display = "block";
     host.appendChild(app.canvas);
 
-    const bg = new Sprite(Texture.from(defaultBackground()));
-    app.stage.addChild(bg);
+    if (!opts.transparent) app.stage.addChild(new Sprite(Texture.from(defaultBackground())));
     return new StageRenderer(app, source);
   }
 

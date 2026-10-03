@@ -7,10 +7,14 @@ interface Props {
   /** Must be a stable object: changing it rebuilds the renderer. */
   source: StageSource;
   strictInteger?: boolean;
+  /** "width" (default): fill the container's width. "window": fit inside the whole container, both ways. */
+  fit?: "width" | "window";
+  /** Characters only, no background (for compositing in OBS). */
+  transparent?: boolean;
 }
 
-/** The Pixi canvas, scaled by CSS to fill its container's width. */
-export default function StageView({ peers, source, strictInteger = false }: Props) {
+/** The Pixi canvas, scaled by CSS to fill its container. */
+export default function StageView({ peers, source, strictInteger = false, fit = "width", transparent = false }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [renderer, setRenderer] = useState<StageRenderer | null>(null);
   const [failed, setFailed] = useState(false);
@@ -22,7 +26,7 @@ export default function StageView({ peers, source, strictInteger = false }: Prop
     let created: StageRenderer | undefined;
 
     // init is async, so the effect may be cleaned up (StrictMode, fast navigation) before it ends.
-    StageRenderer.create(host, source)
+    StageRenderer.create(host, source, { transparent })
       .then((r) => {
         if (cancelled) return r.destroy();
         created = r;
@@ -39,7 +43,7 @@ export default function StageView({ peers, source, strictInteger = false }: Prop
       created?.destroy();
       setRenderer(null);
     };
-  }, [source]);
+  }, [source, transparent]);
 
   useEffect(() => {
     renderer?.setPeers(peers);
@@ -48,15 +52,16 @@ export default function StageView({ peers, source, strictInteger = false }: Prop
   useEffect(() => {
     const host = hostRef.current;
     if (!renderer || !host) return;
-    const fit = () => {
+    const refit = () => {
       const w = host.clientWidth;
-      renderer.setCssScale(stageScale(w, (w * STAGE_H) / STAGE_W, strictInteger));
+      const h = fit === "window" ? host.clientHeight : (w * STAGE_H) / STAGE_W;
+      renderer.setCssScale(stageScale(w, h, strictInteger));
     };
-    fit();
-    const ro = new ResizeObserver(fit);
+    refit();
+    const ro = new ResizeObserver(refit);
     ro.observe(host);
     return () => ro.disconnect();
-  }, [renderer, strictInteger]);
+  }, [renderer, strictInteger, fit]);
 
   if (failed) {
     return (
@@ -65,7 +70,14 @@ export default function StageView({ peers, source, strictInteger = false }: Prop
       </div>
     );
   }
+  const layout = fit === "window" ? "h-full items-center" : "";
+  // Letterbox bars blend into the page instead of showing as heavy black rectangles.
+  const backdrop = transparent ? "" : "bg-ink";
   return (
-    <div ref={hostRef} data-testid="stage" className="flex w-full justify-center overflow-hidden bg-black" />
+    <div
+      ref={hostRef}
+      data-testid="stage"
+      className={`flex w-full justify-center overflow-hidden ${layout} ${backdrop}`}
+    />
   );
 }
