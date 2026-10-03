@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MAX_NAME_LENGTH, MAX_SPEAKERS, type ErrorCode, type Peer } from "../../shared/protocol";
 import { isValidRoomId } from "../../shared/room";
+import { MicError, listMics, openMic, stopStream, type MicDevice, type MicErrorKind } from "../audio/mic";
+import type { LinkState } from "../net/peer";
 import { navigate } from "../router";
 import { getHostKey, getName } from "../store/me";
-import { connectRoom, disconnectRoom, kickPeer, setLocked, useRoom } from "../store/room";
+import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, switchMic, useRoom } from "../store/room";
 
 const END_MESSAGES: Partial<Record<ErrorCode, string>> = {
   FULL: `ห้องเต็มแล้ว (สูงสุด ${MAX_SPEAKERS} คน)`,
@@ -56,10 +58,50 @@ function Notice({ title, children }: { title: string; children: React.ReactNode 
   );
 }
 
+const MIC_ERRORS: Record<MicErrorKind, string> = {
+  denied: "เบราว์เซอร์ไม่อนุญาตให้ใช้ไมค์ กดไอคอนแม่กุญแจข้างช่อง URL แล้วเปิดสิทธิ์ไมโครโฟน จากนั้นลองใหม่",
+  notFound: "ไม่พบไมโครโฟนในเครื่อง ลองเสียบไมค์หรือหูฟังแล้วลองใหม่",
+  busy: "ไมค์ถูกโปรแกรมอื่นใช้อยู่ ปิดโปรแกรมนั้นแล้วลองใหม่",
+  unknown: "เปิดไมค์ไม่สำเร็จ ลองใหม่อีกครั้ง",
+};
+
 function Lobby({ roomId }: { roomId: string }) {
   const [name, setName] = useState(getName);
+  const [busy, setBusy] = useState(false);
+  const [micError, setMicError] = useState<MicErrorKind | null>(null);
+  const alive = useRef(true);
   const trimmed = name.trim();
   const isHost = getHostKey(roomId) !== undefined;
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  async function enter(listenOnly: boolean) {
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setMicError(null);
+    let stream: MediaStream | null = null;
+    if (!listenOnly) {
+      try {
+        stream = await openMic();
+      } catch (err) {
+        if (!alive.current) return;
+        setMicError(err instanceof MicError ? err.kind : "unknown");
+        setBusy(false);
+        return;
+      }
+    }
+    if (!alive.current) {
+      // The user left while the permission prompt was open: don't join a room nobody is looking at.
+      stopStream(stream);
+      return;
+    }
+    connectRoom(roomId, trimmed, stream);
+  }
 
   return (
     <main className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-6 px-4">
@@ -67,7 +109,7 @@ function Lobby({ roomId }: { roomId: string }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (trimmed) connectRoom(roomId, trimmed);
+          void enter(false);
         }}
         className="pixel-box flex w-full flex-col gap-4 bg-panel p-6"
       >
@@ -81,15 +123,123 @@ function Lobby({ roomId }: { roomId: string }) {
             className="border-4 border-edge bg-ink px-3 py-2 text-lg outline-none focus:border-glow"
           />
         </label>
+        {micError && (
+          <div role="alert" className="border-4 border-hot bg-ink p-3 text-sm">
+            <p>{MIC_ERRORS[micError]}</p>
+            <button
+              type="button"
+              onClick={() => void enter(true)}
+              className="mt-2 underline decoration-dotted underline-offset-4"
+            >
+              เข้าแบบฟังอย่างเดียว (ไม่มีไมค์)
+            </button>
+          </div>
+        )}
         <button
           type="submit"
-          disabled={!trimmed}
+          disabled={!trimmed || busy}
           className="pixel-btn bg-glow px-4 py-3 text-xl text-ink disabled:cursor-not-allowed disabled:opacity-40"
         >
-          เข้าห้อง
+          {busy ? "กำลังเปิดไมค์…" : "🎤 เข้าห้อง"}
         </button>
+        <p className="text-center text-sm opacity-70">แนะนำให้ใส่หูฟังเพื่อไม่ให้เสียงก้อง</p>
       </form>
     </main>
+  );
+}
+
+const LINK_LABEL: Record<LinkState | "none", string> = {
+  connected: "เชื่อมต่อเสียงแล้ว",
+  connecting: "กำลังเชื่อมต่อเสียง",
+  failed: "เชื่อมต่อเสียงไม่ได้",
+  none: "ยังไม่เชื่อมต่อ",
+};
+const LINK_DOT: Record<LinkState | "none", string> = {
+  connected: "bg-glow",
+  connecting: "bg-yellow-400",
+  failed: "bg-hot",
+  none: "bg-edge",
+};
+
+function LinkDot({ name, state }: { name: string; state: LinkState | undefined }) {
+  const key = state ?? "none";
+  return (
+    <span
+      data-testid="link"
+      data-peer={name}
+      data-state={key}
+      role="img"
+      aria-label={`${name}: ${LINK_LABEL[key]}`}
+      title={LINK_LABEL[key]}
+      className={`inline-block size-3 border-2 border-black ${LINK_DOT[key]}`}
+    />
+  );
+}
+
+function MicControls() {
+  const hasMic = useRoom((s) => s.hasMic);
+  const muted = useRoom((s) => s.muted);
+  const [devices, setDevices] = useState<MicDevice[]>([]);
+  const [deviceId, setDeviceId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hasMic) return;
+    let alive = true;
+    const refresh = () =>
+      listMics().then((list) => {
+        if (alive) setDevices(list);
+      });
+    void refresh();
+    navigator.mediaDevices.addEventListener("devicechange", refresh);
+    return () => {
+      alive = false;
+      navigator.mediaDevices.removeEventListener("devicechange", refresh);
+    };
+  }, [hasMic]);
+
+  if (!hasMic) {
+    return <p className="text-sm opacity-70">โหมดฟังอย่างเดียว (ไม่มีไมค์)</p>;
+  }
+
+  async function change(id: string) {
+    setDeviceId(id);
+    setError(null);
+    try {
+      await switchMic(id);
+    } catch (err) {
+      setError(err instanceof MicError ? MIC_ERRORS[err.kind] : MIC_ERRORS.unknown);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        onClick={() => setMuted(!muted)}
+        aria-pressed={muted}
+        className={`pixel-btn px-3 py-2 ${muted ? "bg-hot text-ink" : "bg-panel"}`}
+      >
+        {muted ? "🔇 ปิดไมค์อยู่" : "🎤 เปิดไมค์อยู่"}
+      </button>
+      {devices.length > 1 && (
+        <select
+          aria-label="เลือกไมโครโฟน"
+          value={deviceId}
+          onChange={(e) => void change(e.target.value)}
+          className="max-w-56 border-4 border-edge bg-ink px-2 py-2 text-sm"
+        >
+          <option value="" disabled>
+            เลือกไมค์…
+          </option>
+          {devices.map((d) => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+      )}
+      {error && <p role="alert" className="w-full text-sm text-hot">{error}</p>}
+    </div>
   );
 }
 
@@ -98,6 +248,7 @@ function Inside({ roomId }: { roomId: string }) {
   const me = useRoom((s) => s.me);
   const peers = useRoom((s) => s.peers);
   const locked = useRoom((s) => s.locked);
+  const links = useRoom((s) => s.links);
   const [copied, setCopied] = useState(false);
 
   const inviteUrl = `${location.origin}/r/${roomId}`;
@@ -138,6 +289,8 @@ function Inside({ roomId }: { roomId: string }) {
         </div>
       </header>
 
+      <MicControls />
+
       <section className="pixel-box bg-panel p-4" aria-label="ผู้เข้าร่วม">
         <h2 className="mb-3 font-pixel text-xl">
           ในห้อง {people.length}/{MAX_SPEAKERS}
@@ -150,6 +303,7 @@ function Inside({ roomId }: { roomId: string }) {
                 {p.peerId === me?.peerId && <span className="opacity-60"> (คุณ)</span>}
               </span>
               <span className="flex items-center gap-2">
+                {p.peerId !== me?.peerId && <LinkDot name={p.name} state={links[p.peerId]} />}
                 {p.isHost && <span className="font-pixel text-sm text-glow">HOST</span>}
                 {me?.isHost && p.peerId !== me.peerId && (
                   <button

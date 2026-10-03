@@ -26,6 +26,25 @@ export const ClientMessage = v.variant("t", [
   v.object({ t: v.literal("lock"), locked: v.boolean() }),
 ]);
 
+/**
+ * Payload of `signal`. The relay passes it through untouched, so receivers must validate:
+ * it is whatever another (possibly hostile) client chose to send.
+ */
+export const SignalData = v.union([
+  v.object({
+    description: v.object({ type: v.picklist(["offer", "answer"]), sdp: v.string() }),
+  }),
+  v.object({
+    candidate: v.object({
+      candidate: v.string(),
+      sdpMid: v.optional(v.nullable(v.string())),
+      sdpMLineIndex: v.optional(v.nullable(v.number())),
+      usernameFragment: v.optional(v.nullable(v.string())),
+    }),
+  }),
+]);
+
+export type SignalData = v.InferOutput<typeof SignalData>;
 export type ClientMessage = v.InferOutput<typeof ClientMessage>;
 export type Hello = Extract<ClientMessage, { t: "hello" }>;
 export type Role = v.InferOutput<typeof Role>;

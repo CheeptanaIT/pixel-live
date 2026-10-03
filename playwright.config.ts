@@ -4,7 +4,15 @@ export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
   retries: 0,
-  use: { baseURL: "http://localhost:5199", locale: "th-TH" },
+  use: {
+    baseURL: "http://localhost:5199",
+    locale: "th-TH",
+    permissions: ["microphone"],
+    // Chromium's synthetic mic emits a periodic beep, so audio really flows without hardware.
+    launchOptions: {
+      args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+    },
+  },
   webServer: {
     command: "npx vite --port 5199 --strictPort",
     url: "http://localhost:5199/api/health",

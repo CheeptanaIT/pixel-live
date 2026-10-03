@@ -121,8 +121,12 @@ pixel-live/
 ## 5. WebRTC Mesh
 
 - 1 คู่ peer = 1 `RTCPeerConnection` ใช้ audio transceiver อย่างเดียว (stage ใช้ `recvonly`)
-- ใช้ **Perfect Negotiation** โดยฝั่งที่ `peerId` น้อยกว่าเป็น polite ทำให้ไม่ต้องตกลงกันว่าใครเป็นคนเริ่ม
-- ตอนมีคน `join` เข้ามา ทุกคนที่อยู่ในห้องแล้วสร้าง PC ไปหาคนใหม่ (คนใหม่ไม่ต้องเริ่มเอง)
+- **คนที่เพิ่งเข้าห้องเป็นฝ่ายส่ง offer แรกเสมอ** (ฝั่งที่ได้ `welcome` = initiator ส่วนคนที่อยู่ในห้องแล้วและได้ `join` = รอตอบอย่างเดียว) ห้ามให้ทั้งสองฝั่งส่ง offer พร้อมกัน เพราะฝั่ง polite ต้อง rollback แล้ว Chrome บางครั้งไม่สร้าง ICE candidate ต่อ ทำให้ link ค้างที่ "connecting" (เจอจริงราว 1 ใน 20 ครั้ง และห้อง 6 คนล้มแทบทุกครั้ง)
+- ยังคง **Perfect Negotiation** (ฝั่งที่ `peerId` น้อยกว่าเป็น polite) ไว้เป็นตาข่ายนิรภัยสำหรับกรณีชนกันตอน `restartIce`
+- ประมวลผล signal ของแต่ละ link **ทีละข้อความตามลำดับ** (คิว) ไม่งั้น ICE candidate อาจมาถึง `addIceCandidate` ก่อนที่ description ของมันจะถูกตั้งเสร็จ
+- ข้อมูลใน `signal` ผ่าน relay โดยไม่ถูกตรวจ ผู้รับต้อง validate เองด้วย `SignalData` schema
+- **data channel `ctl` ยังไม่ทำใน M2** เลื่อนไปทำตอน M4/M6 ที่ต้องใช้จริง (เพิ่มทีหลังไม่ต้องแก้ส่วนเสียง)
+- หลัง WebSocket ของเราหลุดแล้วต่อใหม่ ให้ทิ้ง link ทั้งหมดแล้วสร้างใหม่ตาม `welcome` เพราะคนอื่นถูกบอกว่าเรา leave แล้วทิ้งฝั่งของเขาไปแล้ว
 - ICE: STUN `stun.cloudflare.com:3478`; TURN (Cloudflare Realtime, ฟรี 1,000 GB/เดือน) ทำในงาน M9 โดย Worker ขอ credential อายุสั้นให้
 - `iceconnectionstatechange` = `failed` ให้เรียก `pc.restartIce()`
 - Mic: `getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })`
