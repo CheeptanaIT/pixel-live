@@ -8,7 +8,9 @@ import { navigate } from "../router";
 import type { StageSource } from "../stage/StageRenderer";
 import StageView from "../stage/StageView";
 import { getHostKey, getName } from "../store/me";
-import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, switchMic, useRoom } from "../store/room";
+import { saveMySpec } from "../avatar/local";
+import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, setMyAvatar, switchMic, useRoom } from "../store/room";
+import AvatarPicker from "../ui/AvatarPicker";
 
 /** Module-level so its identity is stable: a new object would rebuild the whole renderer. */
 const levelsSource: StageSource = {
@@ -115,6 +117,10 @@ function Lobby({ roomId }: { roomId: string }) {
   return (
     <main className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-6 px-4">
       <h1 className="font-pixel text-4xl text-glow">{isHost ? "ห้องของคุณ" : "เข้าร่วมห้อง"}</h1>
+      <section className="pixel-box w-full bg-panel p-6" aria-label="ตัวละครของคุณ">
+        <h2 className="mb-3 font-pixel text-xl">ตัวละครของคุณ</h2>
+        <AvatarPicker apply={saveMySpec} />
+      </section>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -258,6 +264,7 @@ function Inside({ roomId }: { roomId: string }) {
   const peers = useRoom((s) => s.peers);
   const locked = useRoom((s) => s.locked);
   const links = useRoom((s) => s.links);
+  const avatars = useRoom((s) => s.avatars);
   const [copied, setCopied] = useState(false);
 
   const inviteUrl = `${location.origin}/r/${roomId}`;
@@ -265,7 +272,10 @@ function Inside({ roomId }: { roomId: string }) {
     () => (me ? [me, ...peers.filter((p) => p.role === "speaker")] : []),
     [me, peers],
   );
-  const stagePeers = useMemo(() => people.map((p) => ({ peerId: p.peerId, name: p.name })), [people]);
+  const stagePeers = useMemo(
+    () => people.map((p) => ({ peerId: p.peerId, name: p.name, art: avatars[p.peerId] })),
+    [people, avatars],
+  );
 
   async function copyInvite() {
     try {
@@ -305,6 +315,13 @@ function Inside({ roomId }: { roomId: string }) {
       <StageView peers={stagePeers} source={levelsSource} />
 
       <MicControls />
+
+      <details className="pixel-box bg-panel p-4">
+        <summary className="cursor-pointer font-pixel text-lg">🎨 เปลี่ยนตัวละคร</summary>
+        <div className="mt-3">
+          <AvatarPicker apply={setMyAvatar} />
+        </div>
+      </details>
 
       <section className="pixel-box bg-panel p-4" aria-label="ผู้เข้าร่วม">
         <h2 className="mb-3 font-pixel text-xl">

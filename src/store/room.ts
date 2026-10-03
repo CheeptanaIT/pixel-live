@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import type { ErrorCode, Peer, ServerMessage } from "../../shared/protocol";
+import type { AvatarSpec } from "../../shared/p2p";
+import { artFromSeed, artFromSpec, acceptPng, type AvatarArt } from "../avatar/art";
+import { blobStore } from "../avatar/blobs";
+import { getMySpec, saveMySpec } from "../avatar/local";
+import { AvatarSync } from "../avatar/transfer";
 import { levels } from "../audio/levels";
 import { openMic, stopStream } from "../audio/mic";
 import { Mesh } from "../net/mesh";
@@ -22,15 +27,39 @@ interface RoomState {
   links: Record<string, LinkState>;
   hasMic: boolean;
   muted: boolean;
+  /** Drawable art by peerId once known; peers missing here are drawn as generated characters. */
+  avatars: Record<string, AvatarArt>;
 }
 
-const initial: RoomState = { status: "idle", peers: [], locked: false, links: {}, hasMic: false, muted: false };
+const initial: RoomState = {
+  status: "idle",
+  peers: [],
+  locked: false,
+  links: {},
+  hasMic: false,
+  muted: false,
+  avatars: {},
+};
 
 export const useRoom = create<RoomState>(() => initial);
 
 let signaling: Signaling | undefined;
 let mesh: Mesh | undefined;
+let sync: AvatarSync | undefined;
 let mic: MediaStream | null = null;
+
+function setAvatar(peerId: string, art: AvatarArt) {
+  useRoom.setState((cur) => ({ avatars: { ...cur.avatars, [peerId]: art } }));
+}
+
+function dropAvatar(peerId: string) {
+  useRoom.setState((cur) => {
+    if (!(peerId in cur.avatars)) return cur;
+    const avatars = { ...cur.avatars };
+    delete avatars[peerId];
+    return { avatars };
+  });
+}
 
 /** `stream` is the already-opened mic, or null to join as a listener. The store owns it from here. */
 export function connectRoom(roomId: string, name: string, stream: MediaStream | null) {
@@ -65,8 +94,15 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
   signaling = s;
   mesh = new Mesh(selfId, stream, {
     send: (to, data) => s.send({ t: "signal", to, data }),
+    onChannelOpen: (peerId) =>
+      sync?.peerOpen(peerId, { send: (text) => mesh?.sendControl(peerId, text) }),
+    onChannelClose: (peerId) => sync?.peerClose(peerId),
+    onControl: (peerId, text) => void sync?.handle(peerId, text),
     onLinkState(peerId, state) {
-      if (state === null) levels.detach(peerId);
+      if (state === null) {
+        levels.detach(peerId);
+        dropAvatar(peerId);
+      }
       useRoom.setState((cur) => {
         const links = { ...cur.links };
         if (state === null) delete links[peerId];
@@ -77,6 +113,19 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
     onStream: (peerId, remote) => levels.attach(peerId, remote),
   });
   if (stream) levels.attach(selfId, stream);
+
+  // Avatars: announce mine to each peer as its data channel opens, and show theirs once complete.
+  const m = mesh;
+  sync = new AvatarSync({
+    store: blobStore,
+    accept: acceptPng,
+    onAvatar: (peerId, spec) => {
+      void artFromSpec(spec, blobStore).then((art) => {
+        if (art && mesh === m) setAvatar(peerId, art);
+      });
+    },
+  });
+  void applyMyAvatar(getMySpec(), selfId, m);
   if (import.meta.env.DEV) (window as unknown as { __pixelMesh?: Mesh }).__pixelMesh = mesh;
   s.start();
 }
@@ -86,10 +135,25 @@ export function disconnectRoom() {
   signaling = undefined;
   mesh?.close();
   mesh = undefined;
+  sync = undefined;
   stopStream(mic);
   mic = null;
   levels.clear();
   useRoom.setState(initial);
+}
+
+/** Show my own avatar locally and announce it to everyone. Falls back to a generated one if files are gone. */
+async function applyMyAvatar(spec: AvatarSpec, selfId: string, forMesh: Mesh | undefined) {
+  const art = (await artFromSpec(spec, blobStore)) ?? artFromSeed(selfId);
+  if (mesh !== forMesh) return;
+  setAvatar(selfId, art);
+  sync?.setMine(spec);
+}
+
+/** Change my avatar mid-call: remember it, redraw it, tell every peer. */
+export async function setMyAvatar(spec: AvatarSpec) {
+  saveMySpec(spec);
+  await applyMyAvatar(spec, getPeerId(), mesh);
 }
 
 export function kickPeer(peerId: string) {

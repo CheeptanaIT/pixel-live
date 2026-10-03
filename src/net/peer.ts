@@ -23,11 +23,20 @@ export interface PeerLinkOptions {
   onState(state: LinkState): void;
   /** The remote voice, once its track arrives. */
   onStream(stream: MediaStream): void;
+  /** Peer-to-peer data channel: opened, closed, and a text message from the other side. */
+  onChannelOpen(): void;
+  onChannelClose(): void;
+  onControl(text: string): void;
 }
+
+/** Above this much queued data, `sendControl` waits for the buffer to drain. */
+const BUFFER_HIGH = 512 * 1024;
+const BUFFER_LOW = 64 * 1024;
 
 /** One RTCPeerConnection to one remote peer, using the "perfect negotiation" pattern. */
 export class PeerLink {
   readonly pc: RTCPeerConnection;
+  private readonly channel: RTCDataChannel;
   private readonly audio = new Audio();
   private sender?: RTCRtpSender;
   private makingOffer = false;
@@ -39,6 +48,21 @@ export class PeerLink {
 
   constructor(private readonly opts: PeerLinkOptions) {
     const pc = (this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS }));
+
+    // Both sides create the same pre-agreed channel (negotiated, id 0), so neither has to wait for
+    // an "ondatachannel" and there is no race over who opens it.
+    const channel = (this.channel = pc.createDataChannel("ctl", { negotiated: true, id: 0, ordered: true }));
+    channel.bufferedAmountLowThreshold = BUFFER_LOW;
+    channel.onopen = () => {
+      this.trace("data channel open");
+      if (!this.closed) opts.onChannelOpen();
+    };
+    channel.onclose = () => {
+      if (!this.closed) opts.onChannelClose();
+    };
+    channel.onmessage = (e) => {
+      if (typeof e.data === "string") opts.onControl(e.data);
+    };
 
     const track = opts.localStream?.getAudioTracks()[0];
     if (track && opts.localStream) {
@@ -164,6 +188,24 @@ export class PeerLink {
     if (!import.meta.env.DEV) return;
     this.events.push(`${(performance.now() / 1000).toFixed(2)} ${event}`);
     if (this.events.length > 60) this.events.shift();
+  }
+
+  /** Send a text message to this peer, waiting if the channel is backed up. Drops it if closed. */
+  async sendControl(text: string): Promise<void> {
+    const ch = this.channel;
+    if (ch.readyState !== "open") return;
+    if (ch.bufferedAmount > BUFFER_HIGH) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          ch.removeEventListener("bufferedamountlow", done);
+          ch.removeEventListener("close", done);
+          resolve();
+        };
+        ch.addEventListener("bufferedamountlow", done);
+        ch.addEventListener("close", done);
+      });
+    }
+    if (ch.readyState === "open") ch.send(text);
   }
 
   async replaceTrack(track: MediaStreamTrack) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, SpeechGate, rmsDb } from "../../src/audio/speech";
-import { STAGE_H, STAGE_W, computeLayout, stageScale } from "../../src/stage/layout";
+import { MAX_SPRITE_SIDE } from "../../shared/p2p";
+import { STAGE_H, STAGE_W, computeLayout, fitScale, placeSprite, stageScale } from "../../src/stage/layout";
 import { SPRITE_SIZE, buildAvatarFrames, type Grid } from "../../src/stage/procedural";
 
 describe("computeLayout", () => {
@@ -8,22 +9,19 @@ describe("computeLayout", () => {
     it(`${n} people: integer geometry, inside the stage, no overlapping cells`, () => {
       const slots = computeLayout(n);
       expect(slots).toHaveLength(n);
-      const sprite = SPRITE_SIZE * slots[0].scale;
 
       for (const s of slots) {
-        for (const v of [s.x, s.y, s.w, s.h, s.scale, s.ax, s.ay, s.ly]) expect(Number.isInteger(v)).toBe(true);
+        for (const v of [s.x, s.y, s.w, s.h, s.bx, s.by, s.bw, s.bh, s.ly]) expect(Number.isInteger(v)).toBe(true);
         expect(s.x).toBeGreaterThanOrEqual(0);
         expect(s.y).toBeGreaterThanOrEqual(0);
         expect(s.x + s.w).toBeLessThanOrEqual(STAGE_W);
         expect(s.y + s.h).toBeLessThanOrEqual(STAGE_H);
-        // the sprite *and its speaking outline* (one sprite pixel each side) stay inside the cell
-        expect(s.ax - s.scale).toBeGreaterThanOrEqual(s.x);
-        expect(s.ax + sprite + s.scale).toBeLessThanOrEqual(s.x + s.w);
-        expect(s.ay - s.scale).toBeGreaterThanOrEqual(s.y);
-        // the label starts below the outline, so a speaking character never covers its own name
-        expect(s.ly).toBeGreaterThanOrEqual(s.ay + sprite + s.scale);
+        // the sprite area is inside the cell, and the label fits below it
+        expect(s.bx).toBeGreaterThanOrEqual(s.x);
+        expect(s.bx + s.bw).toBeLessThanOrEqual(s.x + s.w);
+        expect(s.by).toBeGreaterThanOrEqual(s.y);
+        expect(s.ly).toBeGreaterThanOrEqual(s.by + s.bh);
         expect(s.ly + 20).toBeLessThanOrEqual(s.y + s.h); // 20 = label canvas height
-        expect(s.scale).toBe(slots[0].scale); // everyone the same size
       }
       for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
@@ -41,10 +39,12 @@ describe("computeLayout", () => {
     expect(new Set(computeLayout(6).map((s) => s.y)).size).toBe(2);
   });
 
-  it("keeps a lone person big but capped, and 10 people still readable", () => {
-    expect(computeLayout(1)[0].scale).toBeLessThanOrEqual(10);
-    expect(computeLayout(1)[0].scale).toBeGreaterThan(computeLayout(10)[0].scale);
-    expect(computeLayout(10)[0].scale).toBeGreaterThanOrEqual(5);
+  it("keeps a lone generated character big but capped, and 10 still readable", () => {
+    const solo = fitScale(16, 16, computeLayout(1)[0]);
+    const crowd = fitScale(16, 16, computeLayout(10)[0]);
+    expect(solo).toBeLessThanOrEqual(10);
+    expect(solo).toBeGreaterThan(crowd);
+    expect(crowd).toBeGreaterThanOrEqual(5);
   });
 
   it("centres an incomplete last row", () => {
@@ -57,6 +57,50 @@ describe("computeLayout", () => {
 
   it("returns nothing for an empty room", () => {
     expect(computeLayout(0)).toEqual([]);
+  });
+});
+
+describe("fitScale / placeSprite with sprites of any size", () => {
+  // generated 16x16, typical uploads, the widest and tallest allowed, and odd aspect ratios
+  const sprites: [number, number][] = [
+    [16, 16],
+    [32, 32],
+    [48, 64],
+    [64, 64],
+    [MAX_SPRITE_SIDE, MAX_SPRITE_SIDE],
+    [MAX_SPRITE_SIDE, 24],
+    [20, MAX_SPRITE_SIDE],
+    [1, 1],
+  ];
+
+  for (let n = 1; n <= 10; n++) {
+    it(`${n} people: every allowed sprite size fits whole-number scaled, with its outline and bounce`, () => {
+      for (const slot of computeLayout(n)) {
+        for (const [w, h] of sprites) {
+          const s = fitScale(w, h, slot);
+          expect(Number.isInteger(s) && s >= 1, `${w}x${h} scale ${s}`).toBe(true);
+          const { ax, ay } = placeSprite(w, h, s, slot);
+          const tag = `${n} people, ${w}x${h} at ${s}x`;
+          // sprite plus a one-sprite-pixel outline all round stays inside the slot's sprite area
+          expect(ax - s, tag).toBeGreaterThanOrEqual(slot.bx);
+          expect(ax + w * s + s, tag).toBeLessThanOrEqual(slot.bx + slot.bw);
+          expect(ay + h * s + s, tag).toBeLessThanOrEqual(slot.by + slot.bh);
+          // and there is headroom for the bounce (one more sprite pixel up) without leaving the cell
+          expect(ay - 2 * s, tag).toBeGreaterThanOrEqual(slot.by);
+          // the label starts below everything
+          expect(slot.ly, tag).toBeGreaterThanOrEqual(ay + h * s + s);
+        }
+      }
+    });
+  }
+
+  it("a 96x96 sprite in the most crowded room still gets scale 1, never a blurry fraction", () => {
+    expect(fitScale(MAX_SPRITE_SIDE, MAX_SPRITE_SIDE, computeLayout(10)[0])).toBe(1);
+  });
+
+  it("small sprites scale up more than large ones in the same slot", () => {
+    const slot = computeLayout(3)[0];
+    expect(fitScale(16, 16, slot)).toBeGreaterThan(fitScale(64, 64, slot));
   });
 });
 

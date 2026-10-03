@@ -181,31 +181,3 @@ export function gridToCanvas(grid: Grid, palette: Rgb[]): HTMLCanvasElement {
   ctx.putImageData(img, 0, 0);
   return canvas;
 }
-
-/** A 1-pixel dilation of the silhouette, drawn in `color`, on a canvas 2px larger on each axis. */
-export function outlineCanvas(grid: Grid, color: Rgb): HTMLCanvasElement {
-  const size = SPRITE_SIZE + 2;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  const img = ctx.createImageData(size, size);
-  const filled = (x: number, y: number) =>
-    x >= 0 && y >= 0 && x < SPRITE_SIZE && y < SPRITE_SIZE && grid[y][x] !== CLEAR;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      let hit = false;
-      for (let dy = -1; dy <= 1 && !hit; dy++) {
-        for (let dx = -1; dx <= 1 && !hit; dx++) hit = filled(x - 1 + dx, y - 1 + dy);
-      }
-      if (hit) {
-        const i = (y * size + x) * 4;
-        img.data[i] = color[0];
-        img.data[i + 1] = color[1];
-        img.data[i + 2] = color[2];
-        img.data[i + 3] = 255;
-      }
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  return canvas;
-}

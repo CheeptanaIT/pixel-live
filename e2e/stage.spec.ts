@@ -141,6 +141,9 @@ test.describe("voice drives the mouth", () => {
     await waitForSpeaking(b.page, "Mint", true); // proves the audio path works before we mute
 
     await a.page.getByRole("button", { name: /เปิดไมค์อยู่/ }).click();
+    // Let the mute reach B and any beep already in flight play out. Without this, a natural gap
+    // between beeps can satisfy "not speaking" a moment before such a beep arrives.
+    await b.page.waitForTimeout(800);
     await waitForSpeaking(b.page, "Mint", false);
 
     const sawTalking = await b.page.evaluate(async () => {

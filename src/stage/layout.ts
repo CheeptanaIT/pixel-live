@@ -5,11 +5,8 @@ export const STAGE_H = 360;
 export interface LayoutOptions {
   width?: number;
   height?: number;
-  /** Side of the square sprite, in sprite pixels. */
-  spriteSize?: number;
-  /** Space under the sprite reserved for the name label, in stage pixels. */
+  /** Space under the sprite area reserved for the name label, in stage pixels. */
   labelHeight?: number;
-  maxScale?: number;
 }
 
 export interface Slot {
@@ -18,39 +15,26 @@ export interface Slot {
   y: number;
   w: number;
   h: number;
-  /** Integer size of one sprite pixel in stage pixels. */
-  scale: number;
-  /** Top-left of the sprite and of the label area, absolute stage coordinates. */
-  ax: number;
-  ay: number;
+  /** The part of the cell sprites may use, including room for the outline and the bounce. */
+  bx: number;
+  by: number;
+  bw: number;
+  bh: number;
+  /** Top of the name label. */
   ly: number;
 }
 
+const PAD = 4;
+
 /** 1–5 people share one row, 6+ split into two rows (last row centred). Everything is an integer. */
 export function computeLayout(count: number, opts: LayoutOptions = {}): Slot[] {
-  const { width = STAGE_W, height = STAGE_H, spriteSize = 16, labelHeight = 18, maxScale = 10 } = opts;
+  const { width = STAGE_W, height = STAGE_H, labelHeight = 18 } = opts;
   if (count <= 0) return [];
 
   const rows = count <= 5 ? 1 : 2;
   const cols = Math.ceil(count / rows);
   const cellW = Math.floor(width / cols);
   const cellH = Math.floor(height / rows);
-
-  // One scale for everybody so the cast looks uniform. The speaking outline adds one sprite pixel
-  // on every side, so the footprint is (spriteSize + 2) sprite pixels, and the label must sit
-  // below the outline, not under the sprite.
-  const padding = 8;
-  const footprint = spriteSize + 2;
-  const scale = Math.max(
-    1,
-    Math.min(
-      maxScale,
-      Math.floor((cellW - padding) / footprint),
-      Math.floor((cellH - labelHeight - padding) / footprint),
-    ),
-  );
-  const sprite = spriteSize * scale;
-  const box = footprint * scale;
 
   const slots: Slot[] = [];
   for (let i = 0; i < count; i++) {
@@ -59,12 +43,31 @@ export function computeLayout(count: number, opts: LayoutOptions = {}): Slot[] {
     const col = i - row * cols;
     const x = Math.floor((width - inRow * cellW) / 2) + col * cellW;
     const y = row * cellH;
-    const ax = x + Math.floor((cellW - sprite) / 2);
-    const top = y + Math.floor((cellH - labelHeight - box) / 2);
-    const ay = top + scale; // leave room above for the outline
-    slots.push({ x, y, w: cellW, h: cellH, scale, ax, ay, ly: ay + sprite + scale + 2 });
+    const bx = x + PAD;
+    const by = y + PAD;
+    const bw = cellW - 2 * PAD;
+    const bh = cellH - labelHeight - 2 * PAD;
+    slots.push({ x, y, w: cellW, h: cellH, bx, by, bw, bh, ly: by + bh + 2 });
   }
   return slots;
+}
+
+/**
+ * Largest whole-number scale at which a sprite fits its slot. The speaking outline adds one sprite
+ * pixel on every side and the bounce lifts the sprite by one more, hence `+2` wide and `+3` tall.
+ * Never below 1: a fractional scale would blur, and sprites are capped small enough to fit at 1.
+ */
+export function fitScale(spriteW: number, spriteH: number, slot: Slot, maxScale = 10): number {
+  const fit = Math.min(Math.floor(slot.bw / (spriteW + 2)), Math.floor(slot.bh / (spriteH + 3)));
+  return Math.max(1, Math.min(maxScale, fit));
+}
+
+/** Sprite top-left: centred horizontally, standing on the bottom of the slot (outline fits below the feet). */
+export function placeSprite(spriteW: number, spriteH: number, scale: number, slot: Slot): { ax: number; ay: number } {
+  return {
+    ax: slot.bx + Math.floor((slot.bw - spriteW * scale) / 2),
+    ay: slot.by + slot.bh - scale - spriteH * scale,
+  };
 }
 
 /**

@@ -6,6 +6,9 @@ export interface MeshCallbacks {
   send(to: string, data: SignalData): void;
   onLinkState(peerId: string, state: LinkState | null): void;
   onStream(peerId: string, stream: MediaStream): void;
+  onChannelOpen(peerId: string): void;
+  onChannelClose(peerId: string): void;
+  onControl(peerId: string, text: string): void;
 }
 
 /** Full-mesh of PeerLinks, one per other peer in the room. */
@@ -35,6 +38,9 @@ export class Mesh {
         send: (data) => this.cb.send(id, data),
         onState: (state) => this.cb.onLinkState(id, state),
         onStream: (stream) => this.cb.onStream(id, stream),
+        onChannelOpen: () => this.cb.onChannelOpen(id),
+        onChannelClose: () => this.cb.onChannelClose(id),
+        onControl: (text) => this.cb.onControl(id, text),
       }),
     );
     this.cb.onLinkState(id, "connecting");
@@ -45,7 +51,13 @@ export class Mesh {
     if (!link) return;
     link.close();
     this.links.delete(peerId);
+    this.cb.onChannelClose(peerId);
     this.cb.onLinkState(peerId, null);
+  }
+
+  /** Text message to one peer over the data channel (no-op if it is not open). */
+  sendControl(peerId: string, text: string): Promise<void> {
+    return this.links.get(peerId)?.sendControl(text) ?? Promise.resolve();
   }
 
   /**
