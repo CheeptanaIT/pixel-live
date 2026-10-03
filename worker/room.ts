@@ -4,13 +4,16 @@ import {
   CLOSE,
   ClientMessage,
   MAX_MESSAGE_CHARS,
+  MAX_SOCKETS_PER_ROOM,
   MAX_SPEAKERS,
   MAX_STAGES,
+  RATE,
   type ErrorCode,
   type Hello,
   type Peer,
   type ServerMessage,
 } from "../shared/protocol";
+import { TokenBucket } from "../shared/ratelimit";
 import { roomIdFromHostKey } from "../shared/room";
 
 /**
@@ -22,6 +25,8 @@ interface Attachment {
   roomId: string;
   peer?: Peer;
   locked: boolean;
+  /** When the socket connected; used to drop sockets that never say hello. */
+  createdAt?: number;
 }
 
 interface Member {
@@ -31,18 +36,55 @@ interface Member {
 
 /** One instance per room. Pure relay: signaling + membership, never touches ctx.storage. */
 export class RoomDO extends DurableObject<Env> {
+  /**
+   * Per-socket message budget. In memory only: while someone floods, the object stays awake, so the
+   * bucket survives exactly as long as it matters (hibernation needs idleness).
+   */
+  private readonly buckets = new Map<WebSocket, TokenBucket>();
+
   async fetch(request: Request): Promise<Response> {
     const roomId = new URL(request.url).pathname.split("/").pop() ?? "";
+    const now = Date.now();
+
+    // Housekeeping on every connect (no timers, no storage): hang up on sockets that connected
+    // but never said hello, then count what is left.
+    const helloTimeout = Number(this.env.HELLO_TIMEOUT_MS) || 10_000;
+    let open = 0;
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as Attachment | null;
+      if (att && !att.peer && typeof att.createdAt === "number" && now - att.createdAt > helloTimeout) {
+        try {
+          ws.close(1008, "hello timeout");
+        } catch {
+          // already closing
+        }
+        continue;
+      }
+      open++;
+    }
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ roomId, locked: false } satisfies Attachment);
+    server.serializeAttachment({ roomId, locked: false, createdAt: now } satisfies Attachment);
+    if (open >= MAX_SOCKETS_PER_ROOM) this.reject(server, "FULL");
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
+    // Checked before anything else (even parsing) so a flood costs as little as possible.
+    let bucket = this.buckets.get(ws);
+    if (!bucket) this.buckets.set(ws, (bucket = new TokenBucket(RATE, Date.now())));
+    const verdict = bucket.take(Date.now());
+    if (verdict === "drop") return;
+    if (verdict === "close") {
+      this.send(ws, { t: "error", code: "RATE_LIMITED" });
+      this.hangUp(ws, 1013, "rate limited"); // "try again later": a healthy client may reconnect, a flooder gains nothing
+      return;
+    }
+
     if (typeof raw !== "string" || raw.length > MAX_MESSAGE_CHARS) {
-      ws.close(1009, "bad frame");
+      this.hangUp(ws, 1009, "bad frame");
       return;
     }
     const att = ws.deserializeAttachment() as Attachment | null;
@@ -86,10 +128,12 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket) {
+    this.buckets.delete(ws);
     this.removePeer(ws);
   }
 
   async webSocketError(ws: WebSocket) {
+    this.buckets.delete(ws);
     this.removePeer(ws);
   }
 
@@ -153,8 +197,22 @@ export class RoomDO extends DurableObject<Env> {
 
   private evict(m: Member, code: ErrorCode, closeCode: number) {
     this.send(m.ws, { t: "error", code });
-    this.removePeer(m.ws);
-    m.ws.close(closeCode, code);
+    this.hangUp(m.ws, closeCode, code);
+  }
+
+  /**
+   * Close a socket from our side. The runtime does not report a close we started ourselves via
+   * webSocketClose in time, so the peer is removed (and everyone told) right here; removePeer is
+   * idempotent, so a later webSocketClose does nothing more.
+   */
+  private hangUp(ws: WebSocket, code: number, reason: string) {
+    this.removePeer(ws);
+    this.buckets.delete(ws);
+    try {
+      ws.close(code, reason);
+    } catch {
+      // already closed
+    }
   }
 
   private reject(ws: WebSocket, code: ErrorCode) {

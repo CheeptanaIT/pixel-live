@@ -1,0 +1,8 @@
+/*
+  X-Content-Type-Options: nosniff
+  # roomId is in the URL, so never leak it through the Referer header
+  Referrer-Policy: no-referrer
+  # not meant to be embedded; the OBS page is a top-level Browser Source, not an iframe
+  X-Frame-Options: DENY
+  # the app needs the microphone for itself and nothing else
+  Permissions-Policy: microphone=(self), camera=(), geolocation=(), payment=()

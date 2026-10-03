@@ -14,5 +14,13 @@
   },
   // Free plan requires SQLite-backed DOs even though RoomDO never touches storage
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO"] }],
+  // Per-IP cap on WebSocket connection attempts (eventually consistent, so a guard rail, not a hard wall)
+  "ratelimits": [
+    { "name": "CONNECT_LIMIT", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }
+  ],
+  "vars": {
+    // A socket that never says hello is closed after this long (swept when the next one connects)
+    "HELLO_TIMEOUT_MS": "10000"
+  },
   "observability": { "enabled": true }
 }

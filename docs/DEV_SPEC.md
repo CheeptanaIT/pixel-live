@@ -103,7 +103,7 @@ pixel-live/
 - ตรวจ hostKey แล้ว **await** แปลว่าข้อความอื่นแทรกได้ ดังนั้นการเช็กความจุกับการเขียน attachment ต้องอยู่ในช่วงโค้ด synchronous ช่วงเดียวกัน
 - socket ที่ส่งข้อความเสียก่อน hello จะถูกปิด แต่ peer ที่ hello แล้วจะได้แค่ `BAD_MESSAGE` โดยไม่ถูกตัด
 - เมื่อ socket สุดท้ายหลุด state ทั้งหมดหายไปพร้อม DO ไม่ต้องตั้ง alarm หรือ cleanup ใดๆ
-- ยังไม่มี rate limit ต่อ socket (ตกไป M9)
+- rate limit ต่อ socket / ต่อ IP / เพดาน socket ต่อห้อง: ดูข้อ 11
 
 **Data channel `ctl` (reliable, ordered) สร้างใน RTCPeerConnection ทุกคู่**
 ```ts
@@ -253,10 +253,28 @@ pixel-live/
 
 - ID และ key เดาไม่ได้ (ดูข้อ 3) และคำสั่ง host ต้องตรวจ hostKey ฝั่ง DO ทุกครั้ง
 - ชื่อยาวไม่เกิน 24 ตัวอักษร และ React escape ให้อยู่แล้ว
-- Worker ตั้ง header CSP, `X-Content-Type-Options: nosniff` และ `Referrer-Policy: no-referrer` (ไม่ให้ roomId รั่วไปกับ referrer)
-- Rate limit แบบ token bucket ต่อ socket ภายใน DO
+- **HTTP headers (`public/_headers`, ทำแล้ว):** `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` (ไม่ให้ roomId ใน URL รั่วไปกับ referrer), `X-Frame-Options: DENY`, `Permissions-Policy` (ไมค์ใช้ได้เฉพาะหน้าเราเอง) ทดสอบแล้วว่าเสิร์ฟครบทุกหน้า และเทสต์ E2E ผ่านกับบิลด์ production ที่ใช้ header นี้
+- **CSP ยังไม่ได้ทำ** (เอกสารฉบับก่อนเขียนว่าทำแล้ว แต่ไม่จริง): Pixi v8 ใช้การสร้างโค้ดแบบ `eval` ในบางเส้นทาง CSP ที่เข้มจะทำให้เวทีพังแบบเงียบๆ ต้องทดสอบจริงก่อน และต้องเปิดทางให้ Google Fonts, `blob:`, `ws:`/`wss:` ไว้ด้วย
 - Worker ตรวจรูปแบบ `roomId` (base58 ยาว 16 ตัว) ก่อนส่งต่อให้ DO
-- ถ้ามีการ spam เปิด WebSocket จำนวนมาก ให้เพิ่ม Cloudflare Turnstile (ฟรี) ก่อนเชื่อม WS
+
+### การจำกัดอัตรา (ทำแล้ว, มีเทสต์และเทสต์พิสูจน์แล้วว่าล้มเมื่อปิดกลไก)
+
+| ชั้น | กลไก | ค่า |
+|---|---|---|
+| Worker | `ratelimits` binding ต่อ IP (`CF-Connecting-IP`) เฉพาะคำขอ upgrade ที่ถูกต้อง ตอบ 429 + `Retry-After` | 60 ครั้ง/นาที/IP (ข้ามถ้าไม่มี header คือตอน dev) |
+| RoomDO | token bucket ต่อ socket ตรวจก่อน parse (`shared/ratelimit.ts`) | burst 600, เติม 20/วินาที, ตัดทิ้งหลังถูกทิ้ง 100 ข้อความติด → ปิดด้วย `1013` (ไม่ใช่โค้ดถาวร ลูกค้าปกติต่อใหม่ได้) |
+| RoomDO | ข้อความใหญ่เกิน 16 KB → ปิด `1009` | SDP จริงมีแค่ไม่กี่ KB |
+| RoomDO | socket ที่ไม่ส่ง hello ภายใน 10 วินาทีถูกปิด `1008` (ล้างตอนมีคนต่อเข้ามาใหม่ ไม่ใช้ timer/storage) | `HELLO_TIMEOUT_MS` |
+| RoomDO | เพดาน 24 socket ต่อห้อง เกินแล้วตอบ `FULL` | |
+
+- ค่า burst มาจากการ**วัดจริง**: คนเข้าห้องส่งราว 5 ข้อความต่อ peer (ห้อง 10 คน ≈ 60 ข้อความ) ตั้ง 600 = 10 เท่า เผื่อเครือข่ายจริงที่มี ICE candidate มากกว่า (srflx/IPv6/relay)
+- **บั๊กที่เจอจากเทสต์ชุดนี้:** ทุกกรณีที่ server เป็นฝ่ายปิดเอง (ตัดเพราะยิงถี่, ข้อความใหญ่) runtime ไม่เรียก `webSocketClose` ให้ทัน จึงไม่มีการประกาศ `leave` และคนอื่นในห้องเห็น "ผี" ค้างอยู่ แก้โดยให้ทุกเส้นทางผ่าน `hangUp()` ที่เรียก `removePeer` เอง (เส้นทางเตะทำถูกอยู่แล้วตั้งแต่ M1)
+
+**ข้อจำกัดที่ต้องรู้ (ไม่ใช่การป้องกันบอตจริงจัง):**
+- `ratelimits` binding เป็นแบบ eventually consistent ตามที่ Cloudflare ระบุ ใช้เป็นแนวกันความผิดพลาดและการยิงแบบธรรมดา ไม่ใช่ระบบนับที่แม่นยำ
+- **คำขอที่ถูกตอบ 429 ก็ยังกินโควตา 100,000 request/วันของ Worker อยู่ดี** เพราะ Worker ถูกเรียกไปแล้ว การป้องกันบอตจริงต้องใช้ WAF/Rate Limiting rules ของ Cloudflare บนโดเมนของตัวเอง ซึ่งใช้บน `workers.dev` ไม่ได้
+- ตัวจำกัดนี้ยัง**ไม่เคยทดสอบบน production จริง** (ทดสอบแล้วในรันไทม์ workerd จำลอง) ต้องตรวจหลัง deploy
+- ห้องที่ถูกยิงด้วย socket ที่ไม่ส่ง hello ครบ 24 ตัวจะตอบ `FULL` กับคนจริงจนกว่าจะถูกล้าง (ภายใน ~10 วินาทีหลังมีการเชื่อมต่อครั้งถัดไป) แต่ผู้โจมตีจาก IP เดียวทำต่อเนื่องไม่ได้เพราะ 24 socket ต่อ 10 วินาที เกินเพดาน 60/นาที
 - Media และ data channel เป็น DTLS แบบ P2P ไม่ผ่าน server จึงตรงกับ NFR-3.1 และ server ไม่เห็นทั้ง sprite และเสียง
 
 **โควตาฟรี** (DO: 100k requests/วัน และนับ WS message แบบ 20:1)

@@ -2,7 +2,23 @@ import * as v from "valibot";
 
 export const MAX_SPEAKERS = 10;
 export const MAX_STAGES = 2;
-export const MAX_MESSAGE_CHARS = 64 * 1024;
+/** Largest legitimate message is an SDP offer/answer (a few KB); anything bigger is abuse. */
+export const MAX_MESSAGE_CHARS = 16 * 1024;
+/** Sockets per room, joined or not. Real use tops out near 14 (12 seats plus refresh overlap). */
+export const MAX_SOCKETS_PER_ROOM = 24;
+
+/**
+ * Token bucket per socket for incoming messages. Measured in a real browser: a newcomer sends
+ * about 5 messages per peer already in the room (hello, offer, a few trickled ICE candidates), so
+ * ~60 for a full room. Real networks yield several times more candidates per pair (server-reflexive,
+ * IPv6, relay), so the burst is 10x the measurement; afterwards a healthy client sends almost nothing.
+ */
+export const RATE = {
+  burst: 600,
+  perSecond: 20,
+  /** Dropped messages in a row (the bucket never recovering) before the socket is closed. */
+  maxDrops: 100,
+} as const;
 export const MAX_NAME_LENGTH = 24;
 
 /** WebSocket close codes >= 4000 are final: the client must not reconnect. */
@@ -64,7 +80,8 @@ export type ErrorCode =
   | "BAD_ROOM"
   | "BAD_KEY"
   | "BAD_MESSAGE"
-  | "FORBIDDEN";
+  | "FORBIDDEN"
+  | "RATE_LIMITED";
 
 export type ServerMessage =
   | { t: "welcome"; you: Peer; locked: boolean; peers: Peer[] }
