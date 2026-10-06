@@ -134,13 +134,7 @@ function Lobby({ roomId }: { roomId: string }) {
         {micError && (
           <div role="alert" className="border-4 border-hot bg-ink p-3 text-sm">
             <p>{MIC_ERRORS[micError]}</p>
-            <button
-              type="button"
-              onClick={() => void enter(true)}
-              className="mt-2 underline decoration-dotted underline-offset-4"
-            >
-              เข้าแบบฟังอย่างเดียว (ไม่มีไมค์)
-            </button>
+            <p className="mt-1 opacity-80">หรือกด “เข้าแบบฟังอย่างเดียว” ด้านล่าง</p>
           </div>
         )}
         <button
