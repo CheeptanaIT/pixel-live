@@ -150,7 +150,15 @@ function Lobby({ roomId }: { roomId: string }) {
         >
           {busy ? "กำลังเปิดไมค์…" : "🎤 เข้าห้อง"}
         </button>
-        <p className="text-center text-sm opacity-70">แนะนำให้ใส่หูฟังเพื่อไม่ให้เสียงก้อง</p>
+        <button
+          type="button"
+          onClick={() => void enter(true)}
+          disabled={!trimmed || busy}
+          className="pixel-btn bg-panel px-4 py-2 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          เข้าแบบฟังอย่างเดียว (ไม่ใช้ไมค์)
+        </button>
+        <p className="text-center text-sm opacity-80">แนะนำให้ใส่หูฟังเพื่อไม่ให้เสียงก้อง</p>
       </form>
     </main>
   );
@@ -168,6 +176,13 @@ const LINK_DOT: Record<LinkState | "none", string> = {
   failed: "bg-hot",
   none: "bg-edge",
 };
+// A glyph per state so the status doesn't rely on colour alone.
+const LINK_GLYPH: Record<LinkState | "none", string> = {
+  connected: "✓",
+  connecting: "…",
+  failed: "✕",
+  none: "–",
+};
 
 function LinkDot({ name, state }: { name: string; state: LinkState | undefined }) {
   const key = state ?? "none";
@@ -179,8 +194,30 @@ function LinkDot({ name, state }: { name: string; state: LinkState | undefined }
       role="img"
       aria-label={`${name}: ${LINK_LABEL[key]}`}
       title={LINK_LABEL[key]}
-      className={`inline-block size-3 border-2 border-black ${LINK_DOT[key]}`}
-    />
+      className={`inline-flex size-5 items-center justify-center border-2 border-black text-xs font-bold leading-none text-ink ${LINK_DOT[key]}`}
+    >
+      <span aria-hidden="true">{LINK_GLYPH[key]}</span>
+    </span>
+  );
+}
+
+/** Destructive action: the first press arms it, a second press within 3s confirms. */
+function KickButton({ name, onKick }: { name: string; onKick(): void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  return (
+    <button
+      onClick={() => (armed ? onKick() : setArmed(true))}
+      className={`pixel-btn min-h-9 px-3 py-1 text-sm text-ink ${armed ? "bg-yellow-400" : "bg-hot"}`}
+      aria-label={armed ? `ยืนยันเชิญ ${name} ออก` : `เชิญ ${name} ออก`}
+    >
+      {armed ? "ยืนยัน?" : "เชิญออก"}
+    </button>
   );
 }
 
@@ -354,9 +391,18 @@ function Inside({ roomId }: { roomId: string }) {
 
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-pixel text-3xl text-glow">PIXEL LIVE</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={copyInvite} className="pixel-btn bg-glow px-3 py-2 text-ink">
             {copied ? "คัดลอกแล้ว ✓" : "📋 คัดลอกลิงก์เชิญ"}
+          </button>
+          <button
+            onClick={() => {
+              disconnectRoom();
+              navigate("/");
+            }}
+            className="pixel-btn bg-panel px-3 py-2"
+          >
+            🚪 ออกจากห้อง
           </button>
           {me?.isHost && (
             <button
@@ -397,13 +443,7 @@ function Inside({ roomId }: { roomId: string }) {
                 {p.peerId !== me?.peerId && <LinkDot name={p.name} state={links[p.peerId]} />}
                 {p.isHost && <span className="font-pixel text-sm text-glow">HOST</span>}
                 {me?.isHost && p.peerId !== me.peerId && (
-                  <button
-                    onClick={() => kickPeer(p.peerId)}
-                    className="pixel-btn bg-hot px-2 py-1 text-sm text-ink"
-                    aria-label={`เชิญ ${p.name} ออก`}
-                  >
-                    เตะ
-                  </button>
+                  <KickButton name={p.name} onKick={() => kickPeer(p.peerId)} />
                 )}
               </span>
             </li>

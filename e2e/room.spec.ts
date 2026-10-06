@@ -68,7 +68,9 @@ test("host can lock the room, kick a guest, and the guest is told why", async ({
   await joinAs(late.page, path, "Late");
   await expect(late.page.getByText("ห้องนี้ถูกล็อกโดย Host")).toBeVisible();
 
+  // Kicking needs a second press to confirm
   await host.page.getByRole("button", { name: "เชิญ Jay ออก" }).click();
+  await host.page.getByRole("button", { name: "ยืนยันเชิญ Jay ออก" }).click();
   await expect(guest.page.getByText("คุณถูก Host เชิญออกจากห้อง")).toBeVisible();
   await expect(roster(host.page)).not.toContainText("Jay");
 

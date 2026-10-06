@@ -5,7 +5,7 @@
   --font-body: "Kanit", system-ui, sans-serif;
   --color-ink: #1b1530;
   --color-panel: #2b2250;
-  --color-edge: #5a4a9c;
+  --color-edge: #8a78d8;
   --color-glow: #7cf5c6;
   --color-hot: #ff6b9d;
   --color-paper: #f4ecd8;
@@ -37,6 +37,13 @@ body {
   border: 4px solid #000;
   box-shadow: inset -4px -4px 0 0 rgb(0 0 0 / 0.3);
   transition: transform 60ms steps(1);
+}
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--color-glow);
+  outline-offset: 2px;
 }
 .pixel-btn:active {
   transform: translate(2px, 2px);
