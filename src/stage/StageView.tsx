@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DEFAULT_SCENE } from "../../shared/p2p";
 import { STAGE_H, STAGE_W, stageScale } from "./layout";
 import { StageRenderer, type StagePeer, type StageSource } from "./StageRenderer";
 
@@ -9,12 +10,14 @@ interface Props {
   strictInteger?: boolean;
   /** "width" (default): fill the container's width. "window": fit inside the whole container, both ways. */
   fit?: "width" | "window";
+  /** The room background; absent = the built-in default. Must be stable between renders. */
+  scene?: { id: string; canvas: HTMLCanvasElement | null };
   /** Characters only, no background (for compositing in OBS). */
   transparent?: boolean;
 }
 
 /** The Pixi canvas, scaled by CSS to fill its container. */
-export default function StageView({ peers, source, strictInteger = false, fit = "width", transparent = false }: Props) {
+export default function StageView({ peers, source, strictInteger = false, fit = "width", scene, transparent = false }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [renderer, setRenderer] = useState<StageRenderer | null>(null);
   const [failed, setFailed] = useState(false);
@@ -48,6 +51,10 @@ export default function StageView({ peers, source, strictInteger = false, fit = 
   useEffect(() => {
     renderer?.setPeers(peers);
   }, [renderer, peers]);
+
+  useEffect(() => {
+    renderer?.setBackground(scene?.id ?? DEFAULT_SCENE, scene?.canvas ?? null);
+  }, [renderer, scene]);
 
   useEffect(() => {
     const host = hostRef.current;

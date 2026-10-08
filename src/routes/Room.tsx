@@ -10,6 +10,8 @@ import { getHostKey, getName } from "../store/me";
 import { saveMySpec } from "../avatar/local";
 import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, setMyAvatar, switchMic, useRoom } from "../store/room";
 import AvatarPicker from "../ui/AvatarPicker";
+import EmoteBar from "../ui/EmoteBar";
+import ScenePicker from "../ui/ScenePicker";
 
 const END_MESSAGES: Partial<Record<ErrorCode, string>> = {
   FULL: `ห้องเต็มแล้ว (สูงสุด ${MAX_SPEAKERS} คน)`,
@@ -353,6 +355,7 @@ function Inside({ roomId }: { roomId: string }) {
   const locked = useRoom((s) => s.locked);
   const links = useRoom((s) => s.links);
   const avatars = useRoom((s) => s.avatars);
+  const scene = useRoom((s) => s.scene);
   const [copied, setCopied] = useState(false);
 
   const inviteUrl = `${location.origin}/r/${roomId}`;
@@ -409,9 +412,20 @@ function Inside({ roomId }: { roomId: string }) {
         </div>
       </header>
 
-      <StageView peers={stagePeers} source={levelsSource} />
+      <StageView peers={stagePeers} source={levelsSource} scene={scene} />
+
+      <EmoteBar />
 
       <MicControls />
+
+      {me?.isHost && (
+        <details className="pixel-box bg-panel p-4">
+          <summary className="cursor-pointer font-pixel text-lg">🖼️ ฉากหลัง</summary>
+          <div className="mt-3">
+            <ScenePicker />
+          </div>
+        </details>
+      )}
 
       {me?.isHost && <ObsPanel roomId={roomId} connected={peers.filter((p) => p.role === "stage").length} />}
 

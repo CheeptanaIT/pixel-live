@@ -1,4 +1,6 @@
-import { Application, Container, Sprite, Texture, TextureStyle } from "pixi.js";
+import { Application, Container, Rectangle, Sprite, Texture, TextureStyle } from "pixi.js";
+import { DEFAULT_SCENE, EMOTE_IDS, type EmoteId } from "../../shared/p2p";
+import { EMOTE_SIZE, emoteCanvas } from "./emotes";
 import { artFromSeed, dilateOutline, type AvatarArt } from "../avatar/art";
 import { STAGE_H, STAGE_W, computeLayout, fitScale, placeSprite, type Slot } from "./layout";
 import { defaultBackground } from "./scenery";
@@ -18,11 +20,24 @@ export interface StageSource {
   isSpeaking(peerId: string): boolean;
   /** Runs once per frame before drawing (feeds the level monitor). */
   tick?(nowMs: number): void;
+  /** Emotes fired by anybody; returns the unsubscribe function. */
+  onEmote?(listener: (peerId: string, id: EmoteId) => void): () => void;
 }
 
 type Frame = "idle" | "talk" | "blink";
 
 const TWEEN_MS = 200;
+const EMOTE_MS = 1600;
+/** Rises one emote pixel every step, so it moves on the pixel grid like everything else. */
+const EMOTE_STEP_MS = 90;
+const EMOTE_RISE_STEPS = 12;
+const EMOTE_BLINK_MS = 400;
+const MAX_EMOTES = 4;
+
+interface FloatingEmote {
+  sprite: Sprite;
+  start: number;
+}
 const OUTLINE_COLOR: [number, number, number] = [124, 245, 198];
 
 class AvatarView {
@@ -41,6 +56,7 @@ class AvatarView {
   private slot?: Slot;
   private scale = 1;
 
+  private emotes: FloatingEmote[] = [];
   private nextBlinkAt = 0;
   private blinkUntil = 0;
   frame: Frame = "idle";
@@ -133,6 +149,48 @@ class AvatarView {
     this.frame = speaking ? "talk" : nowMs < this.blinkUntil ? "blink" : "idle";
     this.body.texture = this.textures[this.frame];
     this.outline.visible = speaking;
+    this.placeEmotes(nowMs);
+  }
+
+  /** Float an icon up from above the head. Shared textures belong to the renderer. */
+  addEmote(texture: Texture, nowMs: number) {
+    if (this.emotes.length >= MAX_EMOTES) this.dropEmote(this.emotes[0]);
+    const sprite = new Sprite(texture);
+    this.container.addChild(sprite);
+    this.emotes.push({ sprite, start: nowMs });
+    this.placeEmotes(nowMs);
+  }
+
+  private dropEmote(e: FloatingEmote) {
+    this.container.removeChild(e.sprite);
+    e.sprite.destroy();
+    this.emotes = this.emotes.filter((x) => x !== e);
+  }
+
+  get emoteCount() {
+    return this.emotes.length;
+  }
+
+  private placeEmotes(nowMs: number) {
+    const art = this.art;
+    if (!art) return;
+    const k = Math.min(4, Math.max(2, Math.round(this.scale / 2))); // one emote pixel = k stage pixels
+    for (const e of [...this.emotes]) {
+      const age = nowMs - e.start;
+      if (age >= EMOTE_MS) {
+        this.dropEmote(e);
+        continue;
+      }
+      const rise = Math.min(EMOTE_RISE_STEPS, Math.floor(age / EMOTE_STEP_MS)) * k;
+      const size = EMOTE_SIZE * k;
+      const x = Math.round((art.width * this.scale - size) / 2);
+      // above the head, rising; never above the top edge of the stage
+      const y = Math.max(-this.container.y, -size - 4 * k - rise);
+      e.sprite.scale.set(k);
+      e.sprite.position.set(x, y);
+      // blink out at the end instead of fading: no semi-transparent pixels
+      e.sprite.visible = age < EMOTE_MS - EMOTE_BLINK_MS || Math.floor(age / 80) % 2 === 0;
+    }
   }
 
   destroy() {
@@ -149,12 +207,27 @@ export class StageRenderer {
   private readonly avatars = new Map<string, AvatarView>();
   private readonly seeded = new Map<string, AvatarArt>();
   private destroyed = false;
+  private bgId = DEFAULT_SCENE;
+  private bgCanvas: HTMLCanvasElement | null = null;
+  private readonly emoteTextures = new Map<EmoteId, Texture>();
+  private readonly unsubscribeEmotes?: () => void;
 
   private constructor(
     readonly app: Application,
     private readonly source: StageSource,
+    private readonly bg?: Sprite,
   ) {
     app.ticker.add(() => this.frame(performance.now()));
+    for (const id of EMOTE_IDS) this.emoteTextures.set(id, Texture.from(emoteCanvas(id)));
+    this.unsubscribeEmotes = source.onEmote?.((peerId, id) => this.emote(peerId, id));
+  }
+
+  /** Show an emote above a character; ignored for people who are not on the stage. */
+  emote(peerId: string, id: EmoteId) {
+    const view = this.avatars.get(peerId);
+    const tex = this.emoteTextures.get(id);
+    if (this.destroyed || !view || !tex) return;
+    view.addEmote(tex, performance.now());
   }
 
   /**
@@ -177,8 +250,29 @@ export class StageRenderer {
     app.canvas.style.display = "block";
     host.appendChild(app.canvas);
 
-    if (!opts.transparent) app.stage.addChild(new Sprite(Texture.from(defaultBackground())));
-    return new StageRenderer(app, source);
+    let bg: Sprite | undefined;
+    if (!opts.transparent) {
+      bg = new Sprite(Texture.from(defaultBackground()));
+      app.stage.addChild(bg);
+    }
+    return new StageRenderer(app, source, bg);
+  }
+
+  /**
+   * Swap the room background (`null` = the built-in default). The renderer works on its own copy,
+   * so the caller's canvas stays usable. Does nothing on the transparent stage, which has none.
+   */
+  setBackground(id: string, canvas: HTMLCanvasElement | null) {
+    if (this.destroyed || !this.bg || (id === this.bgId && canvas === this.bgCanvas)) return;
+    this.bgId = id;
+    this.bgCanvas = canvas;
+    const copy = document.createElement("canvas");
+    copy.width = STAGE_W;
+    copy.height = STAGE_H;
+    copy.getContext("2d")!.drawImage(canvas ?? defaultBackground(), 0, 0);
+    const old = this.bg.texture;
+    this.bg.texture = Texture.from(copy);
+    old.destroy(true);
   }
 
   get canvas() {
@@ -237,13 +331,21 @@ export class StageRenderer {
   debug() {
     return {
       fps: this.app.ticker.FPS,
+      scene: this.bgId,
       peers: Object.fromEntries(
         [...this.avatars].map(([id, v]) => [
           id,
-          { name: v.name, speaking: v.speaking, frame: v.frame, art: v.artId, x: v.container.x, y: v.container.y },
+          { name: v.name, speaking: v.speaking, frame: v.frame, art: v.artId, x: v.container.x, y: v.container.y, emotes: v.emoteCount },
         ]),
       ),
     };
+  }
+
+  /** Dev/test hook: the colour of one stage pixel as actually rendered (background included). */
+  samplePixel(x: number, y: number): [number, number, number, number] {
+    if (!import.meta.env.DEV) return [0, 0, 0, 0]; // GPU readback is for tests only
+    const { pixels } = this.app.renderer.extract.pixels({ target: this.app.stage, frame: new Rectangle(x, y, 1, 1) });
+    return [pixels[0], pixels[1], pixels[2], pixels[3]];
   }
 
   /** Dev/test hook: frames actually drawn over `ms`, measured on the render ticker. */
@@ -266,7 +368,9 @@ export class StageRenderer {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.unsubscribeEmotes?.();
     for (const view of this.avatars.values()) view.destroy();
+    for (const tex of this.emoteTextures.values()) tex.destroy(true);
     this.avatars.clear();
     this.app.destroy(true, { children: true, texture: true });
   }

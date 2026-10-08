@@ -1,4 +1,5 @@
 import { levels } from "../audio/levels";
+import { emoteBus } from "./emotes";
 import type { StageSource } from "./StageRenderer";
 
 /**
@@ -8,4 +9,5 @@ import type { StageSource } from "./StageRenderer";
 export const levelsSource: StageSource = {
   isSpeaking: (id) => levels.isSpeaking(id),
   tick: (now) => levels.tick(now),
+  onEmote: (listener) => emoteBus.subscribe(listener),
 };

@@ -124,6 +124,9 @@ describe("P2P message schema", () => {
     expect(ok({ t: "profile", avatar: { kind: "sprites", idle: sha, talk: sha } })).toBe(true);
     expect(ok({ t: "want", sha })).toBe(true);
     expect(ok({ t: "file", sha, seq: 0, total: 1, data: "AAAA" })).toBe(true);
+    expect(ok({ t: "emote", id: 3 })).toBe(true);
+    expect(ok({ t: "scene", bg: "builtin:studio" })).toBe(true);
+    expect(ok({ t: "scene", bg: sha })).toBe(true);
   });
 
   it("rejects malformed or out-of-range input", () => {
@@ -137,6 +140,13 @@ describe("P2P message schema", () => {
     expect(bad({ t: "profile", avatar: { kind: "seed", seed: "" } })).toBe(true);
     expect(bad({ t: "profile", avatar: { kind: "seed", seed: "x".repeat(65) } })).toBe(true);
     expect(bad({ t: "profile", avatar: { kind: "sprites", idle: sha } })).toBe(true);
+    expect(bad({ t: "emote", id: 5 })).toBe(true);
+    expect(bad({ t: "emote", id: 0 })).toBe(true);
+    expect(bad({ t: "emote", id: "1" })).toBe(true);
+    expect(bad({ t: "emote" })).toBe(true);
+    expect(bad({ t: "scene", bg: "builtin:nope" })).toBe(true);
+    expect(bad({ t: "scene", bg: "http://evil.example/x.png" })).toBe(true);
+    expect(bad({ t: "scene" })).toBe(true);
     expect(bad({ t: "evil" })).toBe(true);
   });
 
@@ -149,9 +159,20 @@ describe("P2P message schema", () => {
 });
 
 /** Two (or more) AvatarSyncs wired together through in-memory channels. */
-function setup(opts: { accept?: (b: Uint8Array<ArrayBuffer>) => Promise<boolean>; now?: () => number } = {}) {
+function setup(
+  opts: {
+    accept?: (b: Uint8Array<ArrayBuffer>) => Promise<boolean>;
+    acceptScene?: (b: Uint8Array<ArrayBuffer>) => Promise<boolean>;
+    /** Is peer "A" the host, as far as B can tell? */
+    aIsHost?: boolean;
+    now?: () => number;
+  } = {},
+) {
   const mkStore = () => new MemoryBlobStore();
   const received: { peerId: string; spec: AvatarSpec }[] = [];
+  const scenes: string[] = [];
+  const emotes: { peerId: string; id: number }[] = [];
+  const hostNow = { value: opts.aIsHost ?? true };
   const sent: { to: string; msg: Record<string, unknown> }[] = [];
 
   const aStore = mkStore();
@@ -159,12 +180,20 @@ function setup(opts: { accept?: (b: Uint8Array<ArrayBuffer>) => Promise<boolean>
   const a = new AvatarSync({
     store: aStore,
     accept: opts.accept ?? (async () => true),
+    acceptScene: opts.acceptScene ?? (async () => true),
+    isHost: () => false,
+    onScene: () => undefined,
+    onEmote: () => undefined,
     onAvatar: () => undefined,
     now: opts.now,
   });
   const b = new AvatarSync({
     store: bStore,
     accept: opts.accept ?? (async () => true),
+    acceptScene: opts.acceptScene ?? (async () => true),
+    isHost: (peerId) => peerId === "A" && hostNow.value,
+    onScene: (bg) => scenes.push(bg),
+    onEmote: (peerId, id) => emotes.push({ peerId, id }),
     onAvatar: (peerId, spec) => received.push({ peerId, spec }),
     now: opts.now,
   });
@@ -184,7 +213,7 @@ function setup(opts: { accept?: (b: Uint8Array<ArrayBuffer>) => Promise<boolean>
       setTimeout(() => void a.handle("B", t), 0);
     },
   };
-  return { a, b, aStore, bStore, toA, toB, received, sent };
+  return { a, b, aStore, bStore, toA, toB, received, scenes, emotes, sent, hostNow };
 }
 
 async function waitFor(cond: () => boolean, what: string) {
@@ -403,5 +432,176 @@ describe("AvatarSync", () => {
 
   it("AvatarSpec itself rejects unknown kinds", () => {
     expect(v.safeParse(AvatarSpec, { kind: "url", href: "https://evil.example/x.png" }).success).toBe(false);
+  });
+});
+
+describe("AvatarSync scenes", () => {
+  const sceneBytes = fakePng(40_000, 7); // three chunks
+
+  it("tells a late joiner about a built-in scene right when the channel opens", async () => {
+    const { a, b, toA, toB, scenes, sent } = setup();
+    a.setScene("builtin:studio");
+    b.peerOpen("A", toA);
+    a.peerOpen("B", toB);
+    await waitFor(() => scenes.length === 1, "built-in scene");
+    expect(scenes).toEqual(["builtin:studio"]);
+    expect(sent.some((s) => s.msg.t === "want")).toBe(false);
+  });
+
+  it("downloads a custom scene once, verifies it and reports it only when complete", async () => {
+    const { a, b, aStore, bStore, toA, toB, scenes } = setup();
+    const sha = await sha256Hex(sceneBytes);
+    await aStore.put(sha, sceneBytes);
+    a.setScene(sha);
+    b.peerOpen("A", toA);
+    a.peerOpen("B", toB);
+    await waitFor(() => scenes.length === 1, "custom scene");
+    expect(scenes).toEqual([sha]);
+    expect(await bStore.get(sha)).toEqual(sceneBytes);
+  });
+
+  it("pushes a change to peers that are already connected", async () => {
+    const { a, b, toA, toB, scenes } = setup();
+    b.peerOpen("A", toA);
+    a.peerOpen("B", toB);
+    a.setScene("builtin:sunset");
+    await waitFor(() => scenes.length === 1, "first change");
+    a.setScene("builtin:mint");
+    await waitFor(() => scenes.length === 2, "second change");
+    expect(scenes).toEqual(["builtin:sunset", "builtin:mint"]);
+  });
+
+  it("ignores a scene from someone who is not the host", async () => {
+    const { b, toA, scenes } = setup({ aIsHost: false });
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "scene", bg: "builtin:studio" }));
+    await quiet();
+    expect(scenes).toEqual([]);
+  });
+
+  it("does not fetch a file for a scene announced by a non-host", async () => {
+    const { b, toA, sent } = setup({ aIsHost: false });
+    const sha = await sha256Hex(sceneBytes);
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "scene", bg: sha }));
+    await quiet();
+    expect(sent.some((s) => s.msg.t === "want")).toBe(false);
+  });
+
+  it("refuses a scene file that fails the image check, and never reports it", async () => {
+    const { a, b, aStore, bStore, toA, toB, scenes } = setup({ acceptScene: async () => false });
+    const sha = await sha256Hex(sceneBytes);
+    await aStore.put(sha, sceneBytes);
+    a.setScene(sha);
+    b.peerOpen("A", toA);
+    a.peerOpen("B", toB);
+    await quiet(150);
+    expect(scenes).toEqual([]);
+    expect(await bStore.get(sha)).toBeUndefined();
+  });
+
+  it("only serves the scene it announces, not arbitrary cached files", async () => {
+    const { a, aStore, toB, sent } = setup();
+    const other = fakePng(2_000, 5);
+    const otherSha = await sha256Hex(other);
+    await aStore.put(otherSha, other);
+    a.setScene("builtin:night");
+    a.peerOpen("B", toB);
+    await a.handle("B", JSON.stringify({ t: "want", sha: otherSha }));
+    await quiet();
+    expect(sent.some((s) => s.msg.t === "file")).toBe(false);
+  });
+
+  it("an avatar update does not cancel a scene download that is in flight", async () => {
+    const { a, b, aStore, bStore, toA, toB, scenes } = setup();
+    const sha = await sha256Hex(sceneBytes);
+    await aStore.put(sha, sceneBytes);
+    a.setScene(sha);
+    a.setMine({ kind: "seed", seed: "one" });
+    b.peerOpen("A", toA);
+    a.peerOpen("B", toB);
+    a.setMine({ kind: "seed", seed: "two" }); // re-announces the profile mid-transfer
+    await waitFor(() => scenes.length === 1, "scene despite profile change");
+    expect(await bStore.get(sha)).toEqual(sceneBytes);
+  });
+
+  it("a newer scene replaces one that is still downloading", async () => {
+    const { b, bStore, toA, scenes } = setup();
+    const first = fakePng(40_000, 1);
+    const firstSha = await sha256Hex(first);
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "scene", bg: firstSha }));
+    await b.handle("A", JSON.stringify({ t: "scene", bg: "builtin:mint" }));
+    // the first file shows up late: nobody wants it any more
+    await b.handle("A", JSON.stringify({ t: "file", sha: firstSha, seq: 0, total: 1, data: toBase64(fakePng(100)) }));
+    await quiet();
+    expect(scenes).toEqual(["builtin:mint"]);
+    expect(await bStore.get(firstSha)).toBeUndefined();
+  });
+
+  it("scenes are applied in the order announced even when the older one needs a slow cache lookup", async () => {
+    const { b, bStore, toA, scenes } = setup();
+    const sha = await sha256Hex(sceneBytes);
+    await bStore.put(sha, sceneBytes);
+    const realGet = bStore.get.bind(bStore);
+    bStore.get = async (k) => {
+      await quiet(30); // the cache lookup is still pending when the next message arrives
+      return realGet(k);
+    };
+    b.peerOpen("A", toA);
+    const first = b.handle("A", JSON.stringify({ t: "scene", bg: sha }));
+    const second = b.handle("A", JSON.stringify({ t: "scene", bg: "builtin:mint" }));
+    await Promise.all([first, second]);
+    await quiet(100);
+    expect(scenes).toEqual([sha, "builtin:mint"]); // the last word is the newest scene
+  });
+
+  it("holds a scene that arrives before the sender is known to be the host, then applies it", async () => {
+    const { b, toA, scenes, hostNow } = setup({ aIsHost: false });
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "scene", bg: "builtin:studio" }));
+    await quiet();
+    expect(scenes).toEqual([]);
+    b.recheckHosts(); // still not the host: nothing happens
+    await quiet();
+    expect(scenes).toEqual([]);
+    hostNow.value = true; // the roster update says A is the host
+    b.recheckHosts();
+    await waitFor(() => scenes.length === 1, "held scene");
+    expect(scenes).toEqual(["builtin:studio"]);
+  });
+});
+
+describe("AvatarSync emotes", () => {
+  it("reports an emote with who sent it", async () => {
+    const { b, toA, emotes } = setup();
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "emote", id: 2 }));
+    expect(emotes).toEqual([{ peerId: "A", id: 2 }]);
+  });
+
+  it("drops emotes that follow each other too fast, then accepts again", async () => {
+    let t = 1000;
+    const { b, toA, emotes } = setup({ now: () => t });
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "emote", id: 1 }));
+    t += 50;
+    await b.handle("A", JSON.stringify({ t: "emote", id: 2 })); // too soon
+    t += 200;
+    await b.handle("A", JSON.stringify({ t: "emote", id: 3 }));
+    expect(emotes.map((e) => e.id)).toEqual([1, 3]);
+  });
+
+  it("ignores emotes from a peer whose channel is not open", async () => {
+    const { b, emotes } = setup();
+    await b.handle("Z", JSON.stringify({ t: "emote", id: 1 }));
+    expect(emotes).toEqual([]);
+  });
+
+  it("ignores an out-of-range emote id", async () => {
+    const { b, toA, emotes } = setup();
+    b.peerOpen("A", toA);
+    await b.handle("A", JSON.stringify({ t: "emote", id: 9 }));
+    expect(emotes).toEqual([]);
   });
 });

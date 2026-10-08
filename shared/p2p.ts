@@ -13,7 +13,32 @@ export const CHUNK_BYTES = 16 * 1024;
 export const MAX_CHUNKS = Math.ceil(MAX_FILE_BYTES / CHUNK_BYTES);
 export const MAX_CONTROL_CHARS = 64 * 1024;
 
+/** Custom backgrounds travel at half stage size (the stage is 640x360) and are scaled up on arrival. */
+export const BG_W = 320;
+export const BG_H = 180;
+/** Largest background PNG we will decode: the stage's own size. */
+export const MAX_BG_W = 640;
+export const MAX_BG_H = 360;
+
+/** Backgrounds every browser can draw by itself; they are named, never transferred. */
+export const BUILTIN_SCENES = ["night", "studio", "sunset", "mint"] as const;
+export type BuiltinScene = (typeof BUILTIN_SCENES)[number];
+export const DEFAULT_SCENE = "builtin:night";
+
+/** Reactions people can fire at the stage: keys 1-4. */
+export const EMOTE_IDS = [1, 2, 3, 4] as const;
+export type EmoteId = (typeof EMOTE_IDS)[number];
+
 const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
+
+/** `builtin:<name>` or the sha256 of an uploaded background PNG. */
+export const SceneId = v.union([v.picklist(BUILTIN_SCENES.map((n) => `builtin:${n}` as const)), Sha]);
+export type SceneId = v.InferOutput<typeof SceneId>;
+
+/** The file a scene needs fetched, or null for a built-in one. */
+export function sceneSha(bg: string): string | null {
+  return bg.startsWith("builtin:") ? null : bg;
+}
 
 export const AvatarSpec = v.variant("kind", [
   v.object({ kind: v.literal("seed"), seed: v.pipe(v.string(), v.minLength(1), v.maxLength(64)) }),
@@ -24,6 +49,9 @@ export type AvatarSpec = v.InferOutput<typeof AvatarSpec>;
 export const ControlMessage = v.variant("t", [
   v.object({ t: v.literal("profile"), avatar: AvatarSpec }),
   v.object({ t: v.literal("want"), sha: Sha }),
+  /** Background for the whole room. Only honoured when it comes from the host. */
+  v.object({ t: v.literal("emote"), id: v.picklist(EMOTE_IDS) }),
+  v.object({ t: v.literal("scene"), bg: SceneId }),
   v.object({
     t: v.literal("file"),
     sha: Sha,

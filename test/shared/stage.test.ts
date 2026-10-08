@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, SpeechGate, rmsDb } from "../../src/audio/speech";
-import { MAX_SPRITE_SIDE } from "../../shared/p2p";
+import { EMOTE_IDS, MAX_SPRITE_SIDE, sceneSha } from "../../shared/p2p";
+import { EMOTE_ART, EMOTE_SIZE, EmoteBus } from "../../src/stage/emotes";
+import { coverRect, posterize } from "../../src/stage/background";
 import { STAGE_H, STAGE_W, computeLayout, fitScale, placeSprite, stageScale } from "../../src/stage/layout";
 import { SPRITE_SIZE, buildAvatarFrames, type Grid } from "../../src/stage/procedural";
 
@@ -215,5 +217,65 @@ describe("SpeechGate", () => {
   it("needs a full onDb crossing to start again, not just the off-threshold", () => {
     const g = new SpeechGate();
     expect(g.update(onDb - offMarginDb / 2, 0)).toBe(false);
+  });
+});
+
+describe("background helpers", () => {
+  it("coverRect crops the long side of a wide picture, centred", () => {
+    expect(coverRect({ w: 1000, h: 500 }, { w: 320, h: 180 })).toEqual({ sx: 55, sy: 0, sw: 889, sh: 500 });
+  });
+
+  it("coverRect crops the top and bottom of a tall picture, centred", () => {
+    const r = coverRect({ w: 500, h: 1000 }, { w: 320, h: 180 });
+    expect(r.sx).toBe(0);
+    expect(r.sw).toBe(500);
+    expect(r.sh).toBe(281);
+    expect(r.sy).toBe(359);
+  });
+
+  it("coverRect keeps a picture that already has the right shape whole", () => {
+    expect(coverRect({ w: 320, h: 180 }, { w: 320, h: 180 })).toEqual({ sx: 0, sy: 0, sw: 320, sh: 180 });
+  });
+
+  it("posterize snaps channels to a few levels and makes pixels opaque", () => {
+    const px = new Uint8ClampedArray([10, 120, 250, 17, 128, 128, 128, 255]);
+    posterize(px, 2);
+    expect([...px]).toEqual([0, 0, 255, 255, 255, 255, 255, 255]);
+    expect(new Set(posterize16([0, 17, 34, 51, 68, 85, 100, 255])).size).toBeLessThanOrEqual(16);
+  });
+
+  it("names the file a scene needs, if any", () => {
+    expect(sceneSha("builtin:studio")).toBeNull();
+    expect(sceneSha("a".repeat(64))).toBe("a".repeat(64));
+  });
+});
+
+function posterize16(values: number[]): number[] {
+  const px = new Uint8ClampedArray(values.flatMap((v) => [v, v, v, 255]));
+  posterize(px, 16);
+  return [...px].filter((_, i) => i % 4 === 0);
+}
+
+describe("emotes", () => {
+  it("every emote is an 8x8 grid of known pixel characters with something drawn", () => {
+    for (const id of EMOTE_IDS) {
+      const { rows } = EMOTE_ART[id];
+      expect(rows).toHaveLength(EMOTE_SIZE);
+      for (const row of rows) expect(row).toMatch(new RegExp(`^[.#o]{${EMOTE_SIZE}}$`));
+      expect(rows.join("")).toMatch(/[#o]/);
+    }
+  });
+
+  it("the bus tells every subscriber until they unsubscribe", () => {
+    const bus = new EmoteBus();
+    const a: string[] = [];
+    const b: string[] = [];
+    const offA = bus.subscribe((p, id) => a.push(`${p}:${id}`));
+    bus.subscribe((p, id) => b.push(`${p}:${id}`));
+    bus.emit("x", 1);
+    offA();
+    bus.emit("y", 2);
+    expect(a).toEqual(["x:1"]);
+    expect(b).toEqual(["x:1", "y:2"]);
   });
 });

@@ -31,6 +31,7 @@ export default function Stage({ roomId }: { roomId: string }) {
   const endReason = useRoom((s) => s.endReason);
   const peers = useRoom((s) => s.peers);
   const avatars = useRoom((s) => s.avatars);
+  const scene = useRoom((s) => s.scene);
   const [blocked, setBlocked] = useState(false);
 
   // Page chrome: no background colour when transparent, no cursor, no scrollbars.
@@ -94,7 +95,7 @@ export default function Stage({ roomId }: { roomId: string }) {
   return (
     <div className="fixed inset-0 select-none" style={{ cursor: "none" }}>
       {valid && (
-        <StageView peers={stagePeers} source={levelsSource} strictInteger fit="window" transparent={transparent} />
+        <StageView peers={stagePeers} source={levelsSource} strictInteger fit="window" scene={scene} transparent={transparent} />
       )}
       {blocked && (
         <div

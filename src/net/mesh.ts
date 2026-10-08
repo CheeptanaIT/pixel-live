@@ -67,6 +67,11 @@ export class Mesh {
     return this.links.get(peerId)?.sendControl(text) ?? Promise.resolve();
   }
 
+  /** Same text to everyone whose data channel is open (each send is a no-op otherwise). */
+  broadcastControl(text: string) {
+    for (const link of this.links.values()) void link.sendControl(text).catch(() => undefined);
+  }
+
   /**
    * Rebuild every link (used on each welcome). After our own reconnect the server told everyone
    * we left and rejoined, so they dropped their end and our old connections are dead.

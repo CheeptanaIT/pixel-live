@@ -1,11 +1,14 @@
 import { create } from "zustand";
 import type { ErrorCode, Peer, Role, ServerMessage } from "../../shared/protocol";
-import type { AvatarSpec } from "../../shared/p2p";
+import { DEFAULT_SCENE, type AvatarSpec, type EmoteId } from "../../shared/p2p";
 import { artFromSeed, artFromSpec, acceptPng, type AvatarArt } from "../avatar/art";
 import { blobStore } from "../avatar/blobs";
 import { getMySpec, saveMySpec } from "../avatar/local";
 import { AvatarSync } from "../avatar/transfer";
 import { levels } from "../audio/levels";
+import { emoteBus } from "../stage/emotes";
+import { acceptBackground, createBackgroundPng, resolveScene } from "../stage/background";
+import { sha256Hex } from "../avatar/bytes";
 import { openMic, stopStream } from "../audio/mic";
 import { Mesh } from "../net/mesh";
 import type { LinkState } from "../net/peer";
@@ -29,6 +32,8 @@ interface RoomState {
   muted: boolean;
   /** Drawable art by peerId once known; peers missing here are drawn as generated characters. */
   avatars: Record<string, AvatarArt>;
+  /** The room's background: its id, and the picture (null = the built-in default). */
+  scene: { id: string; canvas: HTMLCanvasElement | null };
   /** The browser is holding playback back until the user clicks (never true inside OBS). */
   audioBlocked: boolean;
 }
@@ -41,6 +46,7 @@ const initial: RoomState = {
   hasMic: false,
   muted: false,
   avatars: {},
+  scene: { id: DEFAULT_SCENE, canvas: null },
   audioBlocked: false,
 };
 
@@ -127,6 +133,10 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
   sync = new AvatarSync({
     store: blobStore,
     accept: acceptPng,
+    acceptScene: acceptBackground,
+    isHost: (peerId) => useRoom.getState().peers.some((p) => p.peerId === peerId && p.isHost),
+    onScene: (bg) => void showScene(bg, m),
+    onEmote: (peerId, id) => emoteBus.emit(peerId, id),
     onAvatar: (peerId, spec) => {
       void artFromSpec(spec, blobStore).then((art) => {
         if (art && mesh === m) setAvatar(peerId, art);
@@ -170,10 +180,49 @@ async function applyMyAvatar(spec: AvatarSpec, selfId: string, forMesh: Mesh | u
   sync?.setMine(spec);
 }
 
+let sceneSeq = 0;
+
+/**
+ * Draw the scene `bg` here. Returns false (and draws nothing) if its picture cannot be loaded, if
+ * we left the room, or if a newer scene was requested while this one was still loading.
+ */
+async function showScene(bg: string, forMesh: Mesh | undefined): Promise<boolean> {
+  const seq = ++sceneSeq;
+  const canvas = await resolveScene(bg, blobStore);
+  if (!canvas || mesh !== forMesh || seq !== sceneSeq) return false;
+  useRoom.setState({ scene: { id: bg, canvas } });
+  return true;
+}
+
+/**
+ * Host only: change the background for everybody (the server never sees it, peers just obey the
+ * host). Only a scene that really loaded here is announced, so what we show and what peers show agree.
+ */
+export async function setScene(bg: string) {
+  if (!useRoom.getState().me?.isHost) return;
+  const forMesh = mesh;
+  if (await showScene(bg, forMesh)) sync?.setScene(bg);
+}
+
+/** Host only: shrink an uploaded picture into a background, store it and make it the scene. */
+export async function uploadScene(file: File) {
+  const bytes = await createBackgroundPng(file);
+  const sha = await sha256Hex(bytes);
+  await blobStore.put(sha, bytes);
+  await setScene(sha);
+}
+
 /** Change my avatar mid-call: remember it, redraw it, tell every peer. */
 export async function setMyAvatar(spec: AvatarSpec) {
   saveMySpec(spec);
   await applyMyAvatar(spec, getPeerId(), mesh);
+}
+
+/** Show my emote on my own stage at once and send it to everybody else. Listeners-only stage pages never call this. */
+export function sendEmote(id: EmoteId) {
+  if (useRoom.getState().status !== "online") return;
+  emoteBus.emit(getPeerId(), id);
+  mesh?.broadcastControl(JSON.stringify({ t: "emote", id }));
 }
 
 export function kickPeer(peerId: string) {
@@ -205,11 +254,14 @@ function apply(msg: ServerMessage) {
       // Also runs after a reconnect: the welcome is the source of truth, so replace everything.
       useRoom.setState({ status: "online", endReason: undefined, me: msg.you, peers: msg.peers, locked: msg.locked });
       mesh?.reset(msg.peers);
+      sync?.recheckHosts();
+      // After a reconnect the host's own choice is still ours to announce; peerOpen re-sends it.
       return;
     case "join":
       useRoom.setState((cur) => ({
         peers: [...cur.peers.filter((p) => p.peerId !== msg.peer.peerId), msg.peer],
       }));
+      sync?.recheckHosts();
       mesh?.connect(msg.peer, false); // they arrived, so they make the first offer
       return;
     case "leave":
