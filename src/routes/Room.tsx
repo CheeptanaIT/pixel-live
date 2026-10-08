@@ -12,6 +12,7 @@ import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, setMyAvatar
 import AvatarPicker from "../ui/AvatarPicker";
 import EmoteBar from "../ui/EmoteBar";
 import ScenePicker from "../ui/ScenePicker";
+import TimelinePanel from "../ui/TimelinePanel";
 
 const END_MESSAGES: Partial<Record<ErrorCode, string>> = {
   FULL: `ห้องเต็มแล้ว (สูงสุด ${MAX_SPEAKERS} คน)`,
@@ -426,6 +427,8 @@ function Inside({ roomId }: { roomId: string }) {
           </div>
         </details>
       )}
+
+      {me?.isHost && <TimelinePanel />}
 
       {me?.isHost && <ObsPanel roomId={roomId} connected={peers.filter((p) => p.role === "stage").length} />}
 

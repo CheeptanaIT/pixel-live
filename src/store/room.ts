@@ -6,6 +6,7 @@ import { blobStore } from "../avatar/blobs";
 import { getMySpec, saveMySpec } from "../avatar/local";
 import { AvatarSync } from "../avatar/transfer";
 import { levels } from "../audio/levels";
+import { startRecording, stopRecording } from "../timeline/session";
 import { emoteBus } from "../stage/emotes";
 import { acceptBackground, createBackgroundPng, resolveScene } from "../stage/background";
 import { sha256Hex } from "../avatar/bytes";
@@ -56,6 +57,7 @@ let signaling: Signaling | undefined;
 let mesh: Mesh | undefined;
 let sync: AvatarSync | undefined;
 let mic: MediaStream | null = null;
+let currentRoom: string | undefined;
 
 function setAvatar(peerId: string, art: AvatarArt) {
   useRoom.setState((cur) => ({ avatars: { ...cur.avatars, [peerId]: art } }));
@@ -77,6 +79,7 @@ function dropAvatar(peerId: string) {
  */
 export function connectRoom(roomId: string, name: string, stream: MediaStream | null, role: Role = "speaker") {
   disconnectRoom();
+  currentRoom = roomId;
   if (role === "speaker") setName(name);
   mic = stream;
   useRoom.setState({ ...initial, status: "connecting", hasMic: stream !== null });
@@ -94,6 +97,7 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
           stopStream(mic);
           mic = null;
           levels.clear();
+          stopRecording();
           useRoom.setState((cur) => ({ status: "ended", endReason: cur.endReason, hasMic: false }));
         } else if (state === "reconnecting") {
           useRoom.setState({ status: "reconnecting" });
@@ -149,6 +153,8 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
 }
 
 export function disconnectRoom() {
+  currentRoom = undefined;
+  stopRecording();
   signaling?.stop();
   signaling = undefined;
   mesh?.close();
@@ -255,6 +261,14 @@ function apply(msg: ServerMessage) {
       useRoom.setState({ status: "online", endReason: undefined, me: msg.you, peers: msg.peers, locked: msg.locked });
       mesh?.reset(msg.peers);
       sync?.recheckHosts();
+      // Only the host keeps a timeline, and it lives in this browser.
+      if (!msg.you.isHost) stopRecording();
+      else if (currentRoom) {
+        void startRecording(currentRoom, (peerId) => {
+          const { me, peers } = useRoom.getState();
+          return me?.peerId === peerId ? me.name : peers.find((p) => p.peerId === peerId)?.name;
+        });
+      }
       // After a reconnect the host's own choice is still ours to announce; peerOpen re-sends it.
       return;
     case "join":

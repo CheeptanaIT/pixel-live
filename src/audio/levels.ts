@@ -17,9 +17,20 @@ interface Tap {
 export class LevelMonitor {
   private ctx?: AudioContext;
   private readonly taps = new Map<string, Tap>();
+  private readonly listeners = new Set<(id: string, speaking: boolean) => void>();
+
+  /** Told whenever somebody starts or stops speaking (the timeline logs these). Returns unsubscribe. */
+  onTransition(fn: (id: string, speaking: boolean) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit(id: string, speaking: boolean) {
+    for (const fn of this.listeners) fn(id, speaking);
+  }
 
   attach(id: string, stream: MediaStream) {
-    this.detach(id);
+    this.detach(id, false); // replacing a stream is not the person stopping
     this.ctx ??= new AudioContext({ latencyHint: "interactive" });
     if (this.ctx.state === "suspended") void this.ctx.resume();
     const analyser = this.ctx.createAnalyser();
@@ -36,19 +47,30 @@ export class LevelMonitor {
     });
   }
 
-  detach(id: string) {
+  detach(id: string, announce = true) {
     const tap = this.taps.get(id);
     if (!tap) return;
+    if (announce && tap.gate.isSpeaking) this.emit(id, false); // leaving mid-sentence ends the sentence
     tap.source.disconnect();
     this.taps.delete(id);
   }
 
+  private lastTickAt = -Infinity;
+
+  /** Tick only if nobody has for `idleMs` (the stage draws every frame; this covers a hidden tab). */
+  tickIfIdle(nowMs: number, idleMs: number) {
+    if (nowMs - this.lastTickAt >= idleMs) this.tick(nowMs);
+  }
+
   /** Call once per rendered frame. */
   tick(nowMs: number) {
-    for (const tap of this.taps.values()) {
+    this.lastTickAt = nowMs;
+    for (const [id, tap] of this.taps) {
       tap.analyser.getFloatTimeDomainData(tap.buffer);
       tap.db = rmsDb(tap.buffer);
-      tap.gate.update(tap.db, nowMs);
+      const was = tap.gate.isSpeaking;
+      const now = tap.gate.update(tap.db, nowMs);
+      if (now !== was) this.emit(id, now);
     }
   }
 
