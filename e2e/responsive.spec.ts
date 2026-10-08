@@ -81,6 +81,8 @@ test.describe("phone specifics", () => {
   });
 
   test("names on a shrunk stage are drawn larger, so they stay readable", async ({ browser }) => {
+    // reads a dev-only hook (like stage.spec.ts), which a production build does not expose
+    test.skip(!!process.env.PIXEL_BASE_URL, "needs the dev build's test hooks");
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ["microphone"] });
     const page = await ctx.newPage();
     await page.goto("/");
