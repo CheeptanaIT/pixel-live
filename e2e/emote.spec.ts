@@ -119,6 +119,20 @@ test.describe("emotes", () => {
     await Promise.all([host, guest].map((p) => p.ctx.close()));
   });
 
+  test("the number keys work on a layout whose number row types other characters", async ({ browser }) => {
+    const host = await person(browser);
+    const guest = await person(browser);
+    const roomId = await createRoom(host.page);
+    await joinAs(guest.page, roomId, "Jay");
+    await expect(guest.page.locator('[data-testid="link"][data-state="connected"]')).toHaveCount(1, { timeout: 20_000 });
+    await expect(host.page.locator('[data-testid="link"][data-state="connected"]')).toHaveCount(1, { timeout: 20_000 });
+    await guest.page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ๅ", code: "Digit1", bubbles: true }));
+    });
+    await expect.poll(() => emotesOver(host.page, "Jay")).toBeGreaterThan(0);
+    await Promise.all([host, guest].map((p) => p.ctx.close()));
+  });
+
   test("mashing a key is limited so one person cannot flood the stage", async ({ browser }) => {
     const host = await person(browser);
     const guest = await person(browser);

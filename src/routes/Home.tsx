@@ -22,12 +22,12 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-6 px-4">
-      <h1 className="font-pixel text-5xl text-glow drop-shadow-[4px_4px_0_#000]">PIXEL LIVE</h1>
-      <p className="text-center text-lg">
+    <main className="mx-auto flex min-h-full max-w-xl flex-col items-center justify-center gap-6 px-4 py-6 md:max-w-2xl">
+      <h1 className="font-pixel text-4xl sm:text-5xl text-glow drop-shadow-[4px_4px_0_#000]">PIXEL LIVE</h1>
+      <p className="text-center text-base sm:text-lg">
         ห้องพอดแคสต์ Pixel ในลิงก์เดียว — ตั้งชื่อ สร้างห้อง แล้วส่งลิงก์ให้เพื่อนได้เลย
       </p>
-      <form onSubmit={createRoom} className="pixel-box flex w-full flex-col gap-4 bg-panel p-6">
+      <form onSubmit={createRoom} className="pixel-box flex w-full flex-col gap-4 bg-panel p-4 sm:p-6">
         <label className="flex flex-col gap-2">
           <span className="font-pixel">ชื่อของคุณ</span>
           <input
@@ -42,10 +42,14 @@ export default function Home() {
         <button
           type="submit"
           disabled={!trimmed || busy}
-          className="pixel-btn bg-glow px-4 py-3 text-xl text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          aria-describedby="name-hint"
+          className="pixel-btn min-h-12 bg-glow px-4 py-3 text-xl text-ink"
         >
           {busy ? "กำลังสร้าง…" : "สร้างห้อง"}
         </button>
+        <p id="name-hint" className="min-h-5 text-center text-sm opacity-80">
+          {trimmed ? "" : "ใส่ชื่อของคุณก่อน แล้วจะกดสร้างห้องได้"}
+        </p>
       </form>
     </main>
   );

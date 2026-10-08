@@ -27,6 +27,10 @@ export interface StageSource {
 type Frame = "idle" | "talk" | "blink";
 
 const TWEEN_MS = 200;
+/** Below this CSS scale the stage is small enough that name labels are drawn larger. */
+const SMALL_STAGE = 0.8;
+/** Stage pixels reserved under each character for its name (at label scale 1). */
+const LABEL_HEIGHT = 18;
 const EMOTE_MS = 1600;
 /** Rises one emote pixel every step, so it moves on the pixel grid like everything else. */
 const EMOTE_STEP_MS = 90;
@@ -63,9 +67,12 @@ class AvatarView {
   speaking = false;
   artId = "";
 
-  constructor(name: string, art: AvatarArt, nowMs: number) {
+  private labelScale: number;
+
+  constructor(name: string, art: AvatarArt, nowMs: number, labelScale = 1) {
     this.name = name;
-    this.label = new Sprite(Texture.from(labelCanvas(name)));
+    this.labelScale = labelScale;
+    this.label = new Sprite(Texture.from(labelCanvas(name, undefined, labelScale)));
     this.container.addChild(this.outline, this.body, this.label);
     this.outline.visible = false;
     this.nextBlinkAt = nowMs + 2000 + Math.random() * 3000;
@@ -94,8 +101,19 @@ class AvatarView {
   setName(name: string) {
     if (name === this.name) return;
     this.name = name;
+    this.rebuildLabel();
+  }
+
+  /** Redraw the name at another size (the stage is shown smaller or larger than before). */
+  setLabelScale(scale: number) {
+    if (scale === this.labelScale) return;
+    this.labelScale = scale;
+    this.rebuildLabel();
+  }
+
+  private rebuildLabel() {
     this.label.texture.destroy(true);
-    this.label.texture = Texture.from(labelCanvas(name));
+    this.label.texture = Texture.from(labelCanvas(this.name, undefined, this.labelScale));
     this.placeLabel();
   }
 
@@ -167,6 +185,11 @@ class AvatarView {
     this.emotes = this.emotes.filter((x) => x !== e);
   }
 
+  /** Height of the name label in stage pixels. */
+  get labelHeight() {
+    return this.label.height;
+  }
+
   get emoteCount() {
     return this.emotes.length;
   }
@@ -207,6 +230,9 @@ export class StageRenderer {
   private readonly avatars = new Map<string, AvatarView>();
   private readonly seeded = new Map<string, AvatarArt>();
   private destroyed = false;
+  private labelScale = 1;
+  private cssScale = 1;
+  private lastPeers: StagePeer[] = [];
   private bgId = DEFAULT_SCENE;
   private bgCanvas: HTMLCanvasElement | null = null;
   private readonly emoteTextures = new Map<EmoteId, Texture>();
@@ -283,6 +309,13 @@ export class StageRenderer {
   setCssScale(scale: number) {
     this.canvas.style.width = `${Math.round(STAGE_W * scale)}px`;
     this.canvas.style.height = `${Math.round(STAGE_H * scale)}px`;
+    this.cssScale = scale;
+    // On a stage shrunk well below its own size (phones), draw names twice as big so they stay readable.
+    const labelScale = scale < SMALL_STAGE ? 2 : 1;
+    if (labelScale === this.labelScale || this.destroyed) return;
+    this.labelScale = labelScale;
+    for (const view of this.avatars.values()) view.setLabelScale(labelScale);
+    this.setPeers(this.lastPeers); // the name row got taller, so the cells need laying out again
   }
 
   /** Generated character for peers that have not shared (or finished sharing) a picture yet. */
@@ -295,6 +328,7 @@ export class StageRenderer {
 
   setPeers(peers: StagePeer[]) {
     if (this.destroyed) return;
+    this.lastPeers = peers;
     const now = performance.now();
     const keep = new Set(peers.map((p) => p.peerId));
 
@@ -312,13 +346,13 @@ export class StageRenderer {
         existing.setName(p.name);
         existing.setArt(art);
       } else {
-        const view = new AvatarView(p.name, art, now);
+        const view = new AvatarView(p.name, art, now, this.labelScale);
         this.avatars.set(p.peerId, view);
         this.app.stage.addChild(view.container);
       }
     }
 
-    const slots = computeLayout(peers.length);
+    const slots = computeLayout(peers.length, { labelHeight: LABEL_HEIGHT * this.labelScale });
     peers.forEach((p, i) => this.avatars.get(p.peerId)!.setSlot(slots[i], now));
   }
 
@@ -346,6 +380,12 @@ export class StageRenderer {
     if (!import.meta.env.DEV) return [0, 0, 0, 0]; // GPU readback is for tests only
     const { pixels } = this.app.renderer.extract.pixels({ target: this.app.stage, frame: new Rectangle(x, y, 1, 1) });
     return [pixels[0], pixels[1], pixels[2], pixels[3]];
+  }
+
+  /** Dev/test hook: how tall the first character's name is on the user's screen, in CSS pixels. */
+  labelOnScreenHeight(): number {
+    const view = this.avatars.values().next().value;
+    return view ? Math.round(view.labelHeight * this.cssScale) : 0;
   }
 
   /** Dev/test hook: frames actually drawn over `ms`, measured on the render ticker. */

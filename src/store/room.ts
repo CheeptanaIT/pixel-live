@@ -10,7 +10,7 @@ import { startRecording, stopRecording } from "../timeline/session";
 import { emoteBus } from "../stage/emotes";
 import { acceptBackground, createBackgroundPng, resolveScene } from "../stage/background";
 import { sha256Hex } from "../avatar/bytes";
-import { openMic, stopStream } from "../audio/mic";
+import { currentDeviceId, openMic, stopStream } from "../audio/mic";
 import { loadIceServers } from "../net/ice";
 import { Mesh } from "../net/mesh";
 import type { LinkState } from "../net/peer";
@@ -241,6 +241,11 @@ export function kickPeer(peerId: string) {
 
 export function setLocked(locked: boolean) {
   signaling?.send({ t: "lock", locked });
+}
+
+/** Which microphone is in use right now (undefined when listening only). */
+export function getMicDeviceId(): string | undefined {
+  return currentDeviceId(mic);
 }
 
 export function setMuted(muted: boolean) {

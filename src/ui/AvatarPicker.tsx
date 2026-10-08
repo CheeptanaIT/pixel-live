@@ -4,6 +4,7 @@ import { artFromSeed, artFromSpec, type AvatarArt } from "../avatar/art";
 import { blobStore } from "../avatar/blobs";
 import { UploadError, createUploadedSpec, getMySpec, randomSeed, type UploadErrorKind } from "../avatar/local";
 import { DEFAULT_PIXEL_SIZE, PIXEL_SIZES } from "../avatar/pixelize";
+import FilePick from "./FilePick";
 
 const UPLOAD_ERRORS: Record<UploadErrorKind, string> = {
   tooBig: "ไฟล์ใหญ่เกิน 5 MB ลองย่อรูปก่อน",
@@ -97,7 +98,7 @@ export default function AvatarPicker({ apply }: { apply(spec: AvatarSpec): void 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4">
         {art ? <Preview art={art} /> : <div className="size-32 border-4 border-edge bg-ink" />}
         <div className="flex flex-col gap-2">
           <button
@@ -107,33 +108,27 @@ export default function AvatarPicker({ apply }: { apply(spec: AvatarSpec): void 
           >
             🎲 สุ่มตัวละคร
           </button>
-          <p className="text-sm opacity-70">หรืออัปรูปของคุณเอง ระบบจะย่อเป็น Pixel Art ให้</p>
+          <p className="text-sm opacity-75">หรืออัปรูปของคุณเอง ระบบจะย่อเป็น Pixel Art ให้</p>
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
-          <span>รูปตอนเงียบ *</span>
-          <input
-            key={`i${inputKey}`}
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            aria-label="รูปตอนเงียบ"
-            onChange={(e) => setIdle(e.target.files?.[0] ?? null)}
-            className="text-xs"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span>รูปตอนพูด (ไม่บังคับ)</span>
-          <input
-            key={`t${inputKey}`}
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            aria-label="รูปตอนพูด"
-            onChange={(e) => setTalk(e.target.files?.[0] ?? null)}
-            className="text-xs"
-          />
-        </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FilePick
+          title="รูปตอนเงียบ *"
+          ariaLabel="รูปตอนเงียบ"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          file={idle}
+          onPick={setIdle}
+          resetKey={inputKey}
+        />
+        <FilePick
+          title="รูปตอนพูด (ไม่บังคับ)"
+          ariaLabel="รูปตอนพูด"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          file={talk}
+          onPick={setTalk}
+          resetKey={inputKey}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -143,7 +138,7 @@ export default function AvatarPicker({ apply }: { apply(spec: AvatarSpec): void 
             value={size}
             onChange={(e) => setSize(Number(e.target.value))}
             aria-label="ความละเอียดพิกเซล"
-            className="border-4 border-edge bg-ink px-2 py-1"
+            className="min-h-11 border-4 border-edge bg-ink px-2 py-1"
           >
             {PIXEL_SIZES.map((s) => (
               <option key={s} value={s}>
@@ -156,12 +151,12 @@ export default function AvatarPicker({ apply }: { apply(spec: AvatarSpec): void 
           type="button"
           onClick={() => void upload()}
           disabled={!idle || busy}
-          className="pixel-btn bg-glow px-3 py-2 text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          className="pixel-btn bg-glow px-3 py-2 text-ink"
         >
           {busy ? "กำลังแปลงรูป…" : "ใช้รูปนี้"}
         </button>
       </div>
-      <p className="text-xs opacity-60">
+      <p className="text-sm opacity-75">
         รูปที่เล็กกว่า 96 พิกเซลอยู่แล้วจะใช้ตามเดิม (ไม่ย่อ) ภาพเคลื่อนไหว GIF จะใช้เฟรมแรก
       </p>
       {error && (

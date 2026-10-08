@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BUILTIN_SCENES, type BuiltinScene } from "../../shared/p2p";
 import { SceneError, type SceneErrorKind } from "../stage/background";
 import { setScene, uploadScene, useRoom } from "../store/room";
+import FilePick from "./FilePick";
 
 const NAMES: Record<BuiltinScene, string> = {
   night: "🌙 ท้องฟ้ายามค่ำ",
@@ -61,27 +62,24 @@ export default function ScenePicker() {
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span>หรืออัปรูปพื้นหลังของคุณเอง</span>
-          <input
-            key={inputKey}
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            aria-label="รูปพื้นหลัง"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="text-xs"
-          />
-        </label>
+        <FilePick
+          title="หรืออัปรูปพื้นหลังของคุณเอง"
+          ariaLabel="รูปพื้นหลัง"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          file={file}
+          onPick={setFile}
+          resetKey={inputKey}
+        />
         <button
           type="button"
           onClick={() => void upload()}
           disabled={!file || busy}
-          className="pixel-btn bg-glow px-3 py-2 text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          className="pixel-btn bg-glow px-3 py-2 text-ink"
         >
           {busy ? "กำลังแปลงรูป…" : "ใช้เป็นฉากหลัง"}
         </button>
       </div>
-      <p className="text-xs opacity-60">
+      <p className="text-sm opacity-75">
         ระบบจะครอปเป็น 16:9 และย่อเป็นพิกเซลอาร์ตให้ ทุกคนในห้องและหน้า OBS จะเห็นภาพเดียวกัน
       </p>
       {error && (

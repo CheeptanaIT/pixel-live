@@ -45,6 +45,16 @@ summary:focus-visible {
   outline: 3px solid var(--color-glow);
   outline-offset: 2px;
 }
+/* A disabled button stays readable (the label says what it will do) but is clearly flat and inert. */
+.pixel-btn:disabled {
+  background: #3a3266;
+  color: #c9c0e6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.pixel-btn:disabled:active {
+  transform: none;
+}
 .pixel-btn:active {
   transform: translate(2px, 2px);
   box-shadow: inset 4px 4px 0 0 rgb(0 0 0 / 0.3);

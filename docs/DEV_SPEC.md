@@ -385,6 +385,6 @@ pixel-live/
 | **M6** | Emotes | กดปุ่ม 1–4 แล้วทุกคนเห็น effect ภายใน 200 ms |
 | **M7** | Stage page สำหรับ OBS | ไลฟ์ unlisted ขึ้น YouTube ได้ภาพและเสียงครบ ไม่มีเสียงสะท้อน |
 | **M8** | Timeline + bookmark + export | วางข้อความ chapters ใน YouTube แล้วระบบรับ, CSV เปิดใน Excel ได้ |
-| **M9** | Polish: UI ธีม retro, mic test meter, error states, TURN | เครือข่ายที่ต้องใช้ TURN ก็เชื่อมต่อได้, ทุก error มีข้อความภาษาไทยที่เข้าใจได้ |
+| **M9** | Polish: UI ธีม retro, mic test meter, error states, TURN (ทำแล้ว: TURN เป็นตัวเลือกที่ปิดไว้, mic test meter, ข้อความ error เพิ่ม; ค้าง: เปิด key จริง + พิสูจน์ relay (เมื่อต้องการ), ขัดเกลาธีม) | เครือข่ายที่ต้องใช้ TURN ก็เชื่อมต่อได้, ทุก error มีข้อความภาษาไทยที่เข้าใจได้ |
 
 **ความเสี่ยงที่ต้องพิสูจน์ก่อน:** M2 (mesh ข้ามเครือข่าย) และ M3 (ภาพคม + lip-sync) ถ้าสองข้อนี้ผ่าน งานที่เหลือเป็นงาน UI และงาน logic ทั่วไป

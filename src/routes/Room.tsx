@@ -8,8 +8,9 @@ import { levelsSource } from "../stage/source";
 import StageView from "../stage/StageView";
 import { getHostKey, getName } from "../store/me";
 import { saveMySpec } from "../avatar/local";
-import { connectRoom, disconnectRoom, kickPeer, setLocked, setMuted, setMyAvatar, switchMic, useRoom } from "../store/room";
+import { connectRoom, disconnectRoom, getMicDeviceId, kickPeer, setLocked, setMuted, setMyAvatar, switchMic, useRoom } from "../store/room";
 import AvatarPicker from "../ui/AvatarPicker";
+import LevelMeter from "../ui/LevelMeter";
 import EmoteBar from "../ui/EmoteBar";
 import ScenePicker from "../ui/ScenePicker";
 import TimelinePanel from "../ui/TimelinePanel";
@@ -20,7 +21,25 @@ const END_MESSAGES: Partial<Record<ErrorCode, string>> = {
   KICKED: "คุณถูก Host เชิญออกจากห้อง",
   REPLACED: "คุณเปิดห้องนี้ในแท็บหรือหน้าต่างอื่น จึงตัดการเชื่อมต่อที่นี่",
   BAD_KEY: "คีย์ Host ไม่ถูกต้อง",
+  BAD_ROOM: "ลิงก์ห้องไม่ถูกต้อง ตรวจสอบลิงก์อีกครั้ง หรือสร้างห้องใหม่",
+  BAD_MESSAGE: "เซิร์ฟเวอร์ปฏิเสธการเชื่อมต่อนี้ ลองเข้าห้องใหม่อีกครั้ง",
+  FORBIDDEN: "เซิร์ฟเวอร์ปฏิเสธการเชื่อมต่อนี้ ลองเข้าห้องใหม่อีกครั้ง",
 };
+
+/** How long "connecting…" may last before we say something more useful than a spinner. */
+const LONG_WAIT_MS = 15_000;
+
+/** True once `active` has been true for `ms` without a break. */
+function useLongWait(active: boolean, ms: number) {
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    setLong(false);
+    if (!active) return;
+    const timer = setTimeout(() => setLong(true), ms);
+    return () => clearTimeout(timer);
+  }, [active, ms]);
+  return long;
+}
 
 export default function Room({ roomId }: { roomId: string }) {
   const status = useRoom((s) => s.status);
@@ -76,6 +95,9 @@ function Lobby({ roomId }: { roomId: string }) {
   const [name, setName] = useState(getName);
   const [busy, setBusy] = useState(false);
   const [micError, setMicError] = useState<MicErrorKind | null>(null);
+  /** A mic opened just to test it; if the user then joins, this same stream is used. */
+  const [testStream, setTestStream] = useState<MediaStream | null>(null);
+  const testRef = useRef<MediaStream | null>(null);
   const alive = useRef(true);
   const trimmed = name.trim();
   const isHost = getHostKey(roomId) !== undefined;
@@ -84,15 +106,40 @@ function Lobby({ roomId }: { roomId: string }) {
     alive.current = true;
     return () => {
       alive.current = false;
+      stopStream(testRef.current); // left without joining; once joined the store owns it (and nulls this)
     };
   }, []);
+
+  async function testMic() {
+    if (busy) return;
+    setBusy(true);
+    setMicError(null);
+    try {
+      const stream = await openMic();
+      if (!alive.current) return stopStream(stream);
+      stopStream(testRef.current);
+      testRef.current = stream;
+      setTestStream(stream);
+    } catch (err) {
+      if (alive.current) setMicError(err instanceof MicError ? err.kind : "unknown");
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
 
   async function enter(listenOnly: boolean) {
     if (!trimmed || busy) return;
     setBusy(true);
     setMicError(null);
     let stream: MediaStream | null = null;
-    if (!listenOnly) {
+    if (listenOnly) {
+      stopStream(testRef.current);
+      testRef.current = null;
+      setTestStream(null);
+    } else if (testRef.current) {
+      stream = testRef.current; // already allowed and tested: no second permission prompt
+      testRef.current = null;
+    } else {
       try {
         stream = await openMic();
       } catch (err) {
@@ -111,18 +158,25 @@ function Lobby({ roomId }: { roomId: string }) {
   }
 
   return (
-    <main className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-6 px-4">
-      <h1 className="font-pixel text-4xl text-glow">{isHost ? "ห้องของคุณ" : "เข้าร่วมห้อง"}</h1>
-      <section className="pixel-box w-full bg-panel p-6" aria-label="ตัวละครของคุณ">
-        <h2 className="mb-3 font-pixel text-xl">ตัวละครของคุณ</h2>
-        <AvatarPicker apply={saveMySpec} />
-      </section>
+    <main className="mx-auto flex min-h-full max-w-xl flex-col items-center justify-center gap-4 px-4 py-6 sm:gap-6 md:max-w-2xl">
+      <h1 className="font-pixel text-3xl text-glow sm:text-4xl">{isHost ? "ห้องของคุณ" : "เข้าร่วมห้อง"}</h1>
+      {/* On a phone the picture picker is long and pushes "enter" far down, so it starts folded there. */}
+      <details
+        open={typeof matchMedia === "function" && matchMedia("(min-width: 640px)").matches}
+        className="pixel-box w-full bg-panel p-4 sm:p-6"
+        aria-label="ตัวละครของคุณ"
+      >
+        <summary className="cursor-pointer py-2 font-pixel text-xl">🎨 ตัวละครของคุณ</summary>
+        <div className="mt-3">
+          <AvatarPicker apply={saveMySpec} />
+        </div>
+      </details>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void enter(false);
         }}
-        className="pixel-box flex w-full flex-col gap-4 bg-panel p-6"
+        className="pixel-box flex w-full flex-col gap-4 bg-panel p-4 sm:p-6"
       >
         <label className="flex flex-col gap-2">
           <span className="font-pixel">ชื่อที่จะแสดงในห้อง</span>
@@ -140,10 +194,23 @@ function Lobby({ roomId }: { roomId: string }) {
             <p className="mt-1 opacity-80">หรือกด “เข้าแบบฟังอย่างเดียว” ด้านล่าง</p>
           </div>
         )}
+        {testStream ? (
+          <LevelMeter stream={testStream} />
+        ) : (
+          <button
+            type="button"
+            onClick={() => void testMic()}
+            disabled={busy}
+            className="pixel-btn min-h-11 bg-panel px-4 py-2"
+          >
+            🎙️ ทดสอบไมค์
+          </button>
+        )}
         <button
           type="submit"
           disabled={!trimmed || busy}
-          className="pixel-btn bg-glow px-4 py-3 text-xl text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          aria-describedby="lobby-name-hint"
+          className="pixel-btn min-h-12 bg-glow px-4 py-3 text-xl text-ink"
         >
           {busy ? "กำลังเปิดไมค์…" : "🎤 เข้าห้อง"}
         </button>
@@ -151,11 +218,13 @@ function Lobby({ roomId }: { roomId: string }) {
           type="button"
           onClick={() => void enter(true)}
           disabled={!trimmed || busy}
-          className="pixel-btn bg-panel px-4 py-2 disabled:cursor-not-allowed disabled:opacity-40"
+          className="pixel-btn min-h-11 bg-panel px-4 py-2"
         >
           เข้าแบบฟังอย่างเดียว (ไม่ใช้ไมค์)
         </button>
-        <p className="text-center text-sm opacity-80">แนะนำให้ใส่หูฟังเพื่อไม่ให้เสียงก้อง</p>
+        <p id="lobby-name-hint" className="text-center text-sm opacity-80">
+          {trimmed ? "แนะนำให้ใส่หูฟังเพื่อไม่ให้เสียงก้อง" : "ใส่ชื่อที่จะแสดงในห้องก่อน แล้วจะกดเข้าห้องได้"}
+        </p>
       </form>
     </main>
   );
@@ -210,7 +279,7 @@ function KickButton({ name, onKick }: { name: string; onKick(): void }) {
   return (
     <button
       onClick={() => (armed ? onKick() : setArmed(true))}
-      className={`pixel-btn min-h-9 px-3 py-1 text-sm text-ink ${armed ? "bg-yellow-400" : "bg-hot"}`}
+      className={`pixel-btn min-h-11 px-3 py-1 text-sm text-ink ${armed ? "bg-yellow-400" : "bg-hot"}`}
       aria-label={armed ? `ยืนยันเชิญ ${name} ออก` : `เชิญ ${name} ออก`}
     >
       {armed ? "ยืนยัน?" : "เชิญออก"}
@@ -233,6 +302,7 @@ function MicControls() {
         if (alive) setDevices(list);
       });
     void refresh();
+    setDeviceId(getMicDeviceId() ?? ""); // show the microphone that is actually in use
     navigator.mediaDevices.addEventListener("devicechange", refresh);
     return () => {
       alive = false;
@@ -268,7 +338,7 @@ function MicControls() {
           aria-label="เลือกไมโครโฟน"
           value={deviceId}
           onChange={(e) => void change(e.target.value)}
-          className="max-w-56 border-4 border-edge bg-ink px-2 py-2 text-sm"
+          className="min-h-11 min-w-0 max-w-full border-4 border-edge bg-ink px-2 py-2 text-sm sm:max-w-64"
         >
           <option value="" disabled>
             เลือกไมค์…
@@ -303,7 +373,7 @@ function ObsPanel({ roomId, connected }: { roomId: string; connected: number }) 
 
   return (
     <details className="pixel-box bg-panel p-4">
-      <summary className="cursor-pointer font-pixel text-lg">
+      <summary className="cursor-pointer py-2 font-pixel text-lg">
         📺 ไลฟ์ผ่าน OBS{" "}
         {connected > 0 && (
           <span data-testid="obs-status" className="text-sm text-glow">
@@ -358,6 +428,7 @@ function Inside({ roomId }: { roomId: string }) {
   const avatars = useRoom((s) => s.avatars);
   const scene = useRoom((s) => s.scene);
   const [copied, setCopied] = useState(false);
+  const stuck = useLongWait(status !== "online", LONG_WAIT_MS);
 
   const inviteUrl = `${location.origin}/r/${roomId}`;
   const people = useMemo<Peer[]>(
@@ -368,6 +439,8 @@ function Inside({ roomId }: { roomId: string }) {
     () => people.map((p) => ({ peerId: p.peerId, name: p.name, art: avatars[p.peerId] })),
     [people, avatars],
   );
+
+  const failedNames = people.filter((p) => p.peerId !== me?.peerId && links[p.peerId] === "failed").map((p) => p.name);
 
   async function copyInvite() {
     try {
@@ -380,17 +453,28 @@ function Inside({ roomId }: { roomId: string }) {
   }
 
   return (
-    <main className="mx-auto flex min-h-full max-w-3xl flex-col gap-4 px-4 py-6">
+    <main className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 xl:max-w-[1400px]">
       {status !== "online" && (
         <div role="status" className="pixel-box bg-hot px-4 py-2 text-center font-pixel text-ink">
           {status === "connecting" ? "กำลังเชื่อมต่อ…" : "สัญญาณหลุด กำลังเชื่อมต่อใหม่…"}
+          {stuck && (
+            <span className="mt-1 block font-sans text-sm">
+              ใช้เวลานานผิดปกติ ตรวจสอบว่าอินเทอร์เน็ตยังใช้ได้ หรือลองรีเฟรชหน้านี้
+            </span>
+          )}
+        </div>
+      )}
+      {failedNames.length > 0 && (
+        <div role="alert" data-testid="link-failed" className="border-4 border-hot bg-ink p-3 text-sm">
+          เชื่อมต่อเสียงกับ {failedNames.join(", ")} ไม่ได้ อาจเป็นเพราะเครือข่ายหรือไฟร์วอลล์ของฝั่งใดฝั่งหนึ่ง ลองให้เขาเข้าห้องใหม่
+          หรือสลับไปใช้เครือข่ายอื่น (เช่น Wi-Fi ↔ มือถือ)
         </div>
       )}
 
-      <header className="flex flex-wrap items-center justify-between gap-3">
+      <header className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <h1 className="font-pixel text-3xl text-glow">PIXEL LIVE</h1>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={copyInvite} className="pixel-btn bg-glow px-3 py-2 text-ink">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          <button onClick={copyInvite} className="pixel-btn col-span-2 min-h-11 bg-glow px-3 py-2 text-ink sm:col-span-1">
             {copied ? "คัดลอกแล้ว ✓" : "📋 คัดลอกลิงก์เชิญ"}
           </button>
           <button
@@ -398,14 +482,14 @@ function Inside({ roomId }: { roomId: string }) {
               disconnectRoom();
               navigate("/");
             }}
-            className="pixel-btn bg-panel px-3 py-2"
+            className="pixel-btn min-h-11 bg-panel px-3 py-2"
           >
             🚪 ออกจากห้อง
           </button>
           {me?.isHost && (
             <button
               onClick={() => setLocked(!locked)}
-              className={`pixel-btn px-3 py-2 ${locked ? "bg-hot text-ink" : "bg-panel"}`}
+              className={`pixel-btn min-h-11 px-3 py-2 ${locked ? "bg-hot text-ink" : "bg-panel"}`}
             >
               {locked ? "🔒 ห้องล็อกอยู่" : "🔓 ล็อกห้อง"}
             </button>
@@ -413,54 +497,62 @@ function Inside({ roomId }: { roomId: string }) {
         </div>
       </header>
 
-      <StageView peers={stagePeers} source={levelsSource} scene={scene} />
+      {/* Phones and tablets: one column (stage, then who is here, then the extras). Wide screens:
+          the stage gets the big left column and the extras sit beside it. */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem] xl:items-start">
+        <div className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4">
+          <StageView peers={stagePeers} source={levelsSource} scene={scene} />
 
-      <EmoteBar />
+          <EmoteBar />
 
-      <MicControls />
-
-      {me?.isHost && (
-        <details className="pixel-box bg-panel p-4">
-          <summary className="cursor-pointer font-pixel text-lg">🖼️ ฉากหลัง</summary>
-          <div className="mt-3">
-            <ScenePicker />
-          </div>
-        </details>
-      )}
-
-      {me?.isHost && <TimelinePanel />}
-
-      {me?.isHost && <ObsPanel roomId={roomId} connected={peers.filter((p) => p.role === "stage").length} />}
-
-      <details className="pixel-box bg-panel p-4">
-        <summary className="cursor-pointer font-pixel text-lg">🎨 เปลี่ยนตัวละคร</summary>
-        <div className="mt-3">
-          <AvatarPicker apply={setMyAvatar} />
+          <MicControls />
         </div>
-      </details>
 
-      <section className="pixel-box bg-panel p-4" aria-label="ผู้เข้าร่วม">
-        <h2 className="mb-3 font-pixel text-xl">
-          ในห้อง {people.length}/{MAX_SPEAKERS}
-        </h2>
-        <ul className="flex flex-col gap-2">
-          {people.map((p) => (
-            <li key={p.peerId} className="flex items-center justify-between gap-2 border-2 border-edge bg-ink px-3 py-2">
-              <span className="truncate">
-                {p.name}
-                {p.peerId === me?.peerId && <span className="opacity-60"> (คุณ)</span>}
-              </span>
-              <span className="flex items-center gap-2">
-                {p.peerId !== me?.peerId && <LinkDot name={p.name} state={links[p.peerId]} />}
-                {p.isHost && <span className="font-pixel text-sm text-glow">HOST</span>}
-                {me?.isHost && p.peerId !== me.peerId && (
-                  <KickButton name={p.name} onKick={() => kickPeer(p.peerId)} />
-                )}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+        <div className="flex min-w-0 flex-col gap-4">
+          <section className="pixel-box bg-panel p-4" aria-label="ผู้เข้าร่วม">
+            <h2 className="mb-3 font-pixel text-xl">
+              ในห้อง {people.length}/{MAX_SPEAKERS}
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {people.map((p) => (
+                <li key={p.peerId} className="flex items-center justify-between gap-2 border-2 border-edge bg-ink px-3 py-2">
+                  <span className="truncate">
+                    {p.name}
+                    {p.peerId === me?.peerId && <span className="opacity-60"> (คุณ)</span>}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {p.peerId !== me?.peerId && <LinkDot name={p.name} state={links[p.peerId]} />}
+                    {p.isHost && <span className="font-pixel text-sm text-glow">HOST</span>}
+                    {me?.isHost && p.peerId !== me.peerId && (
+                      <KickButton name={p.name} onKick={() => kickPeer(p.peerId)} />
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {me?.isHost && (
+            <details className="pixel-box bg-panel p-4">
+              <summary className="cursor-pointer py-2 font-pixel text-lg">🖼️ ฉากหลัง</summary>
+              <div className="mt-3">
+                <ScenePicker />
+              </div>
+            </details>
+          )}
+
+          {me?.isHost && <TimelinePanel />}
+
+          {me?.isHost && <ObsPanel roomId={roomId} connected={peers.filter((p) => p.role === "stage").length} />}
+
+          <details className="pixel-box bg-panel p-4">
+            <summary className="cursor-pointer py-2 font-pixel text-lg">🎨 เปลี่ยนตัวละคร</summary>
+            <div className="mt-3">
+              <AvatarPicker apply={setMyAvatar} />
+            </div>
+          </details>
+        </div>
+      </div>
     </main>
   );
 }
