@@ -20,7 +20,14 @@
   ],
   "vars": {
     // A socket that never says hello is closed after this long (swept when the next one connects)
-    "HELLO_TIMEOUT_MS": "10000"
+    "HELLO_TIMEOUT_MS": "10000",
+    // Relay (TURN) for people whose network blocks direct connections. OFF by default: relayed audio
+    // is free for the first 1,000 GB a month and billed after that. To use it, create a TURN key and
+    // store it with `wrangler secret put TURN_KEY_ID` / `TURN_API_TOKEN`, then set this to "1".
+    // Set it back to "0" to switch relay off again. See docs/DEV_SPEC.md ("TURN").
+    "TURN_ENABLED": "0",
+    // How long relay credentials (and so a relayed call) last, in seconds. Clamped to 600..172800.
+    "TURN_TTL_SECONDS": "21600"
   },
   "observability": { "enabled": true }
 }

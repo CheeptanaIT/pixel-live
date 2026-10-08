@@ -1,4 +1,5 @@
 import { isValidRoomId } from "../shared/room";
+import { iceServersFor, type TurnConfig } from "./turn";
 
 export { RoomDO } from "./room";
 
@@ -8,6 +9,19 @@ export default {
 
     if (url.pathname === "/api/health") {
       return Response.json({ ok: true });
+    }
+
+    if (url.pathname === "/api/turn") {
+      if (request.method !== "GET") return new Response("method not allowed", { status: 405, headers: { Allow: "GET" } });
+      // Each call can mint a TURN credential (free tier is generous but not unlimited): same
+      // per-IP guard as joining a room, in its own bucket.
+      const ip = request.headers.get("CF-Connecting-IP");
+      if (ip) {
+        const { success } = await env.CONNECT_LIMIT.limit({ key: `turn:${ip}` });
+        if (!success) return new Response("too many requests", { status: 429, headers: { "Retry-After": "60" } });
+      }
+      const { iceServers, ttl } = await iceServersFor(env as unknown as TurnConfig);
+      return Response.json({ iceServers, ttl }, { headers: { "Cache-Control": "no-store" } });
     }
 
     const ws = url.pathname.match(/^\/ws\/([^/]+)$/);

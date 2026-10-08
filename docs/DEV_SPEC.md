@@ -131,7 +131,7 @@ pixel-live/
 - ข้อมูลใน `signal` ผ่าน relay โดยไม่ถูกตรวจ ผู้รับต้อง validate เองด้วย `SignalData` schema
 - **data channel `ctl` ยังไม่ทำใน M2** เลื่อนไปทำตอน M4/M6 ที่ต้องใช้จริง (เพิ่มทีหลังไม่ต้องแก้ส่วนเสียง)
 - หลัง WebSocket ของเราหลุดแล้วต่อใหม่ ให้ทิ้ง link ทั้งหมดแล้วสร้างใหม่ตาม `welcome` เพราะคนอื่นถูกบอกว่าเรา leave แล้วทิ้งฝั่งของเขาไปแล้ว
-- ICE: STUN `stun.cloudflare.com:3478`; TURN (Cloudflare Realtime, ฟรี 1,000 GB/เดือน) ทำในงาน M9 โดย Worker ขอ credential อายุสั้นให้
+- ICE: STUN `stun.cloudflare.com:3478` เสมอ และ TURN (Cloudflare Realtime, ฟรี 1,000 GB/เดือน) **เมื่อตั้งค่า key แล้ว** (ทำแล้วใน M9 ดูหัวข้อ "TURN" ด้านล่าง)
 - `iceconnectionstatechange` = `failed` ให้เรียก `pc.restartIce()`
 - Mic: `getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })`
 - จำกัด bitrate ด้วย `sender.setParameters({ encodings: [{ maxBitrate: 32000 }] })` ห้อง 10 คนจะใช้ upload ราว 300 kbps
@@ -139,6 +139,29 @@ pixel-live/
 **กับดักที่รู้อยู่แล้ว**
 - Chrome: remote stream ต้องผูกกับ `<audio>` element ด้วย ไม่อย่างนั้น `MediaStreamSource` ใน WebAudio จะอ่านได้แต่ค่าศูนย์
 - Autoplay: ต้องให้ผู้ใช้กดปุ่ม "เข้าห้อง" ก่อนสร้าง AudioContext และเล่นเสียง ส่วน OBS ไม่ติดเรื่องนี้
+
+### TURN (ทำแล้วใน M9; **ปิดเป็นค่าเริ่มต้น** เป็นตัวเลือกไว้เปิดทีหลัง)
+
+**ใช้ทำอะไร:** เป็นตัวกลางส่งเสียงให้คนที่เครือข่ายกั้นการเชื่อมตรง (ไฟร์วอลล์ออฟฟิศ/โรงเรียน, NAT เข้มงวด) ใช้เฉพาะเมื่อเชื่อมตรงไม่ได้
+
+**ต้นทุน:** Cloudflare Realtime TURN ฟรี 1,000 GB/เดือน เกินนั้นคิด $0.05/GB (คิดจากข้อมูลที่ TURN ส่งออกไปหาไคลเอนต์) เสียง 32 kbps ต่อทิศทาง = คู่ที่ผ่านรีเลย์ใช้ ~29 MB/ชั่วโมง ห้องเล็กประหยัดกว่ามากเพราะจำนวนคู่โตเป็นกำลังสองของจำนวนคน (4 คน = 6 คู่, 10 คน = 45 คู่) ถ้าบัญชีมีบัตรผูกอยู่ การใช้เกินโควตาจะถูกเรียกเก็บเงิน จึงทำเป็นตัวเลือกที่ปิดไว้ก่อน
+
+**การทำงาน:**
+- `GET /api/turn` (Worker, `worker/turn.ts`) ตอบ `{ iceServers, ttl }` โดย **ตอบ STUN อย่างเดียวเสมอ เว้นแต่ครบทั้งสามข้อ:** `TURN_ENABLED = "1"` และมี secret `TURN_KEY_ID` กับ `TURN_API_TOKEN` ครบ เมื่อครบจะขอ credential จาก Cloudflare (`/v1/turn/keys/<id>/credentials/generate-ice-servers`) แล้วส่งต่อ (ตัด URL พอร์ต 53 ที่เบราว์เซอร์ใช้ไม่ได้) key ไม่เคยออกจาก Worker
+- ถ้า Cloudflare ปฏิเสธ/ล่ม/ตอบผิดรูป จะกลับไปตอบ STUN โดยไม่ error การล่มของ TURN จึงไม่กระทบการเข้าห้อง
+- `TURN_TTL_SECONDS` (ค่าเริ่มต้น 21600 = 6 ชั่วโมง, บีบให้อยู่ในช่วง 600–172800) คืออายุ credential และเป็นความยาวสูงสุดของสายที่ผ่านรีเลย์โดยไม่ต้องเชื่อมต่อใหม่ ฝั่งเบราว์เซอร์ขอ credential ใหม่เมื่อผ่านไปครึ่งหนึ่งของอายุ
+- จำกัดอัตราต่อ IP ด้วย binding เดียวกับการเข้าห้อง (bucket แยก `turn:<ip>`)
+- ฝั่งเบราว์เซอร์ (`src/net/ice.ts`) ขอตอนเข้าห้อง รอสูงสุด 3 วินาที ล้มเหลวใช้ STUN และกรอง URL ให้เหลือ `stun:`/`turn:`/`turns:`
+
+**เปิดใช้:**
+1. Cloudflare Dashboard → Realtime → TURN → สร้าง TURN key
+2. `npx wrangler secret put TURN_KEY_ID` และ `npx wrangler secret put TURN_API_TOKEN`
+3. แก้ `TURN_ENABLED` ใน `wrangler.jsonc` เป็น `"1"` แล้ว `npm run deploy`
+4. ตรวจ: `PIXEL_EXPECT_TURN=1 PIXEL_BASE_URL=https://<เว็บ> npx playwright test lobby -g "relay"` (บังคับให้ทุกการเชื่อมต่อใช้รีเลย์ แล้วตรวจว่าเสียงไหลและเส้นทางเป็น relay จริง)
+
+**ปิดอีกครั้ง (สวิตช์ฉุกเฉิน):** แก้ `TURN_ENABLED` เป็น `"0"` แล้ว deploy ไม่ต้องลบ key credential ที่แจกไปแล้วจะหมดอายุเองตาม TTL (หรือ revoke ทีละอันผ่าน API) **ควรตั้งแจ้งเตือนการใช้งาน Realtime ใน Dashboard ไว้ที่ ~70% ของโควตา**
+
+**ยังไม่ได้พิสูจน์:** ว่าสองเครื่องหลัง NAT เข้มงวดต่อกันได้ผ่านรีเลย์จริง เพราะยังไม่มี key (มีเทสต์สำหรับพิสูจน์เตรียมไว้ตามข้อ 4)
 
 ---
 

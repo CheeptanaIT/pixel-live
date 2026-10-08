@@ -11,6 +11,7 @@ import { emoteBus } from "../stage/emotes";
 import { acceptBackground, createBackgroundPng, resolveScene } from "../stage/background";
 import { sha256Hex } from "../avatar/bytes";
 import { openMic, stopStream } from "../audio/mic";
+import { loadIceServers } from "../net/ice";
 import { Mesh } from "../net/mesh";
 import type { LinkState } from "../net/peer";
 import { Signaling } from "../net/signaling";
@@ -149,7 +150,10 @@ export function connectRoom(roomId: string, name: string, stream: MediaStream | 
   });
   if (role === "speaker") void applyMyAvatar(getMySpec(), selfId, m);
   if (import.meta.env.DEV) (window as unknown as { __pixelMesh?: Mesh }).__pixelMesh = mesh;
-  s.start();
+  // Relay credentials first (bounded wait, failure = STUN only) so the first peer connections have them.
+  void loadIceServers().then(() => {
+    if (signaling === s) s.start();
+  });
 }
 
 export function disconnectRoom() {

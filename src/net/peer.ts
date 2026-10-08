@@ -1,10 +1,9 @@
 import type { SignalData } from "../../shared/protocol";
+import { getIceServers } from "./ice";
 
 export type LinkState = "connecting" | "connected" | "failed";
 
 type CandidateData = Extract<SignalData, { candidate: unknown }>["candidate"];
-
-export const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
 /** Opus voice at 32 kbps keeps a 10-person mesh near 300 kbps upload per person. */
 const MAX_AUDIO_BITRATE = 32_000;
@@ -49,7 +48,7 @@ export class PeerLink {
   private readonly events: string[] = [];
 
   constructor(private readonly opts: PeerLinkOptions) {
-    const pc = (this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS }));
+    const pc = (this.pc = new RTCPeerConnection({ iceServers: getIceServers() }));
 
     // Both sides create the same pre-agreed channel (negotiated, id 0), so neither has to wait for
     // an "ondatachannel" and there is no race over who opens it.
